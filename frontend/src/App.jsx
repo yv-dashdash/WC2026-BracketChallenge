@@ -312,7 +312,7 @@ export default function App() {
               <div className="info-banner-row">
                 <span className="info-icon">⏰</span>
                 <span>
-                  <strong>Registration deadline: Thursday June 11th at 8:30 pm CET.</strong>
+                  <strong>Registration deadline: Sunday June 14th at 5:00 pm CET.</strong>
                 </span>
               </div>
 
@@ -331,7 +331,7 @@ export default function App() {
               <div className="info-banner-row">
                 <span className="info-icon">💳</span>
                 <span>
-                  Pay <strong>5 CHF</strong> to Cristian Lafuerza via Twint or cash:{' '}
+                  Pay <strong>5 CHF</strong> to Cristian Lafuerza via Twint or cash{' '}
                 </span>
               </div>
             </div>
