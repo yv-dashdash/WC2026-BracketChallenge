@@ -7,7 +7,23 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
+// ── Production CORS Configuration ──
+const allowedOrigins = [
+  'http://localhost:5173', // Your local frontend URL
+  // 'https://wc2026-bracketchallenge.vercel.app' <--- UNCOMMENT AND ADD YOUR FREE VERCEL URL HERE ONCE DEPLOYED
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl requests, or same-origin)
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  }
+}));
+
 app.use(express.json());
 
 const DATA_DIR = path.join(__dirname, 'data');
@@ -240,4 +256,4 @@ app.delete('/api/admin/users/:userId', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(PORT, () => console.log(`World Cup API running on http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`World Cup API application running on port ${PORT}`));
