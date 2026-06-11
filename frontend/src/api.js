@@ -1,6 +1,9 @@
 import axios from 'axios';
 
-const BASE = '/api';
+// Switch between the production Render backend and local proxy environment
+const BASE = import.meta.env.PROD 
+  ? 'https://wc2026-bracketchallenge.onrender.com/' // <--- Paste your exact live Render URL here, making sure it ends with /api
+  : '/api';
 
 export const loginUser = (name) =>
   axios.post(`${BASE}/users`, { name }).then(r => r.data);
