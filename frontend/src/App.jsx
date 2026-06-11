@@ -212,7 +212,7 @@ export default function App() {
       <header className="header">
         <div className="header-logo">
           <div><span className="logo-wc">FIFA</span>&nbsp;<span className="logo-year">2026</span></div>
-          <div className="logo-byline">by Neurosoft Bioelectronics (v1.1)</div>
+          <div className="logo-byline">(v1.1)</div>
         </div>
         <div className="header-spacer" />
         <div className="header-right">
@@ -322,7 +322,7 @@ export default function App() {
                 <span>
                   Click <em>"Enter Bracket"</em> (top right) to register your prediction and submit it.
                   Enter your <strong>full name</strong> when prompted — you'll need it to log back in.
-                  Once submitted, your bracket is locked — contact Nicolas if you need to make any changes.
+                  Once submitted, your bracket is locked — contact Cristian if you need to make any changes.
                   Brackets (yours and everyone else's) will be visible once the competition starts on <strong>Thursday June 12th at 9:00 pm CET</strong>.
                 </span>
               </div>
@@ -331,10 +331,7 @@ export default function App() {
               <div className="info-banner-row">
                 <span className="info-icon">💳</span>
                 <span>
-                  Pay <strong>10 CHF</strong> to Nicolas Vachicouras via Twint or cash:{' '}
-                  <a href="mailto:nicolas@neurosoft-bio.com" className="info-link">nicolas@neurosoft-bio.com</a>
-                  {' '}·{' '}
-                  <a href="tel:+41788761469" className="info-link">+41 78 876 14 69</a>
+                  Pay <strong>5 CHF</strong> to Cristian Lafuerza via Twint or cash:{' '}
                 </span>
               </div>
             </div>
