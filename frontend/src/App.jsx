@@ -262,26 +262,26 @@ export default function App() {
               <div className="info-grid">
                 <div className="info-pot-card">
                   <div className="info-pot-label">Total Pot</div>
-                  <div className="info-pot-value">{participantCount * 10} CHF</div>
-                  <div className="info-pot-sub">{participantCount} participant{participantCount !== 1 ? 's' : ''} × 10 CHF</div>
+                  <div className="info-pot-value">{participantCount * 5} CHF</div>
+                  <div className="info-pot-sub">{participantCount} participant{participantCount !== 1 ? 's' : ''} × 5 CHF</div>
                 </div>
                 <div className="info-prizes">
                   <div className="info-prize-row">
                     <span className="info-prize-medal">🥇</span>
                     <span className="info-prize-pct">1st place</span>
-                    <span className="info-prize-amt">{Math.round(participantCount * 10 * 0.5)} CHF</span>
+                    <span className="info-prize-amt">{Math.round(participantCount * 5 * 0.5)} CHF</span>
                     <span className="info-prize-share">50%</span>
                   </div>
                   <div className="info-prize-row">
                     <span className="info-prize-medal">🥈</span>
                     <span className="info-prize-pct">2nd place</span>
-                    <span className="info-prize-amt">{Math.round(participantCount * 10 * 0.3)} CHF</span>
+                    <span className="info-prize-amt">{Math.round(participantCount * 5 * 0.3)} CHF</span>
                     <span className="info-prize-share">30%</span>
                   </div>
                   <div className="info-prize-row">
                     <span className="info-prize-medal">🥉</span>
                     <span className="info-prize-pct">3rd place</span>
-                    <span className="info-prize-amt">{Math.round(participantCount * 10 * 0.2)} CHF</span>
+                    <span className="info-prize-amt">{Math.round(participantCount * 5 * 0.2)} CHF</span>
                     <span className="info-prize-share">20%</span>
                   </div>
                 </div>
