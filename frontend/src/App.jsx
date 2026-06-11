@@ -312,7 +312,7 @@ export default function App() {
               <div className="info-banner-row">
                 <span className="info-icon">⏰</span>
                 <span>
-                  <strong>Registration deadline: Thursday June 12th at 8:30 pm CET.</strong>
+                  <strong>Registration deadline: Thursday June 11th at 8:30 pm CET.</strong>
                 </span>
               </div>
 
@@ -323,7 +323,7 @@ export default function App() {
                   Click <em>"Enter Bracket"</em> (top right) to register your prediction and submit it.
                   Enter your <strong>full name</strong> when prompted — you'll need it to log back in.
                   Once submitted, your bracket is locked — contact Cristian if you need to make any changes.
-                  Brackets (yours and everyone else's) will be visible once the competition starts on <strong>Thursday June 12th at 9:00 pm CET</strong>.
+                  Brackets (yours and everyone else's) will be visible once the competition starts on <strong>Thursday June 11th at 9:00 pm CET</strong>.
                 </span>
               </div>
 
