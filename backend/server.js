@@ -9,8 +9,8 @@ const PORT = process.env.PORT || 3001;
 
 // ── Production CORS Configuration ──
 const allowedOrigins = [
-  'http://localhost:5173', // Your local frontend URL
-  'https://wc2026-bracketchallenge.vercel.app' // <--- UNCOMMENT AND ADD YOUR FREE VERCEL URL HERE ONCE DEPLOYED
+  'http://localhost:5173',
+  'https://wc-2026-bracket-challenge.vercel.app' // Authorized production domain
 ];
 
 app.use(cors({
@@ -99,7 +99,7 @@ db.exec(`
   );
 `);
 
-const ADMIN_PASSWORD = 'SonovaWC@2026';
+const ADMIN_PASSWORD = 'SoftIsBeautiful2026';
 
 // ── Scoring constants ────────────────────────────────────────────────────────
 const R32_MATCH_IDS = [
@@ -256,4 +256,4 @@ app.delete('/api/admin/users/:userId', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(PORT, () => console.log(`World Cup API application running on port ${PORT}`));
+app.listen(PORT, () => console.log(`World Cup API running on port ${PORT}`));
