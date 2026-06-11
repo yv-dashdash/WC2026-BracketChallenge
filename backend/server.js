@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3001;
 // ── Production CORS Configuration ──
 const allowedOrigins = [
   'http://localhost:5173', // Your local frontend URL
-  // 'https://wc2026-bracketchallenge.vercel.app' <--- UNCOMMENT AND ADD YOUR FREE VERCEL URL HERE ONCE DEPLOYED
+  'https://wc2026-bracketchallenge.vercel.app' // <--- UNCOMMENT AND ADD YOUR FREE VERCEL URL HERE ONCE DEPLOYED
 ];
 
 app.use(cors({
