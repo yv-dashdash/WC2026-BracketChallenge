@@ -99,7 +99,7 @@ db.exec(`
   );
 `);
 
-const ADMIN_PASSWORD = 'SoftIsBeautiful2026';
+const ADMIN_PASSWORD = 'SonovaWC@2026';
 
 // ── Scoring constants ────────────────────────────────────────────────────────
 const R32_MATCH_IDS = [
