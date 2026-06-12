@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-// Dynamically use the live Render URL in production, or fallback to local port 3001
+// Routes queries cleanly to your production Render container or defaults to your local setup
 const BASE = import.meta.env.PROD 
   ? 'https://wc2026-bracketchallenge.onrender.com/api'
   : 'http://localhost:3001/api';

@@ -1,8 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const Database = require('better-sqlite3');
-const path = require('path');
-const fs = require('fs');
+const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -10,12 +8,11 @@ const PORT = process.env.PORT || 3001;
 // ── Production CORS Configuration ──
 const allowedOrigins = [
   'http://localhost:5173',
-  'https://wc-2026-bracket-challenge.vercel.app' // Authorized production domain
+  'https://wc-2026-bracket-challenge.vercel.app'
 ];
 
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps, curl requests, or same-origin)
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
@@ -26,78 +23,47 @@ app.use(cors({
 
 app.use(express.json());
 
-const DATA_DIR = path.join(__dirname, 'data');
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+// ── Database Connection ──
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
-const db = new Database(path.join(DATA_DIR, 'worldcup.db'));
+// ── Schema Initialization ──
+const initDb = async () => {
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        name TEXT UNIQUE NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
 
-// ── Migrations ───────────────────────────────────────────────────────────────
-db.pragma('foreign_keys = OFF');
+      CREATE TABLE IF NOT EXISTS predictions (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        stage TEXT NOT NULL,
+        match_id TEXT NOT NULL,
+        data TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT unique_user_stage_match UNIQUE(user_id, stage, match_id)
+      );
 
-// 1. Drop email column from users if present
-const usersCols = db.prepare('PRAGMA table_info(users)').all();
-if (usersCols.some(c => c.name === 'email')) {
-  console.log('Migrating users table (removing email)…');
-  db.exec(`
-    CREATE TABLE _users_new (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT UNIQUE NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    INSERT OR IGNORE INTO _users_new (id, name, created_at) SELECT id, name, created_at FROM users;
-    DROP TABLE users;
-    ALTER TABLE _users_new RENAME TO users;
-  `);
-  console.log('Users migration done.');
-}
-
-// 2. Fix predictions FK if it references a non-existent table (e.g. _users_old)
-const predsSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='predictions'").get();
-if (predsSql && !predsSql.sql.includes('REFERENCES users(id)') && predsSql.sql.includes('REFERENCES')) {
-  console.log('Migrating predictions table (fixing FK)…');
-  db.exec(`
-    CREATE TABLE _preds_new (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      stage TEXT NOT NULL,
-      match_id TEXT NOT NULL,
-      data TEXT NOT NULL,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(user_id, stage, match_id)
-    );
-    INSERT OR IGNORE INTO _preds_new SELECT * FROM predictions;
-    DROP TABLE predictions;
-    ALTER TABLE _preds_new RENAME TO predictions;
-  `);
-  console.log('Predictions migration done.');
-}
-
-db.pragma('foreign_keys = ON');
-
-// ── Schema ───────────────────────────────────────────────────────────────────
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS predictions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    stage TEXT NOT NULL,
-    match_id TEXT NOT NULL,
-    data TEXT NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(user_id, stage, match_id)
-  );
-
-  CREATE TABLE IF NOT EXISTS actual_results (
-    stage TEXT PRIMARY KEY,
-    teams TEXT NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-`);
+      CREATE TABLE IF NOT EXISTS actual_results (
+        stage TEXT PRIMARY KEY,
+        teams TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    console.log("Database tables verified successfully in Supabase.");
+  } catch (err) {
+    console.error("Error initializing Supabase tables:", err.message);
+  } finally {
+    client.release();
+  }
+};
+initDb();
 
 const ADMIN_PASSWORD = 'SoftIsBeautiful2026';
 
@@ -113,45 +79,60 @@ const QF_MATCH_IDS  = ['qf_01','qf_02','qf_03','qf_04'];
 const SF_MATCH_IDS  = ['sf_01','sf_02'];
 
 // ── Users ────────────────────────────────────────────────────────────────────
-app.post('/api/users', (req, res) => {
+app.post('/api/users', async (req, res) => {
   const name = req.body?.name?.trim();
   if (!name) return res.status(400).json({ error: 'Name required' });
   try {
-    const existing = db.prepare('SELECT * FROM users WHERE name = ?').get(name);
-    if (existing) return res.json(existing);
-    const result = db.prepare('INSERT INTO users (name) VALUES (?)').run(name);
-    res.json(db.prepare('SELECT * FROM users WHERE id = ?').get(result.lastInsertRowid));
+    const existing = await pool.query('SELECT * FROM users WHERE name = $1', [name]);
+    if (existing.rows.length > 0) return res.json(existing.rows[0]);
+    
+    const result = await pool.query('INSERT INTO users (name) VALUES ($1) RETURNING *', [name]);
+    res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get('/api/users', (_req, res) => {
-  res.json(db.prepare('SELECT id, name, created_at FROM users ORDER BY name').all());
-});
-
-// ── Predictions ──────────────────────────────────────────────────────────────
-app.post('/api/predictions/bulk', (req, res) => {
-  const { user_id, predictions } = req.body;
-  if (!user_id || !Array.isArray(predictions)) return res.status(400).json({ error: 'Missing fields' });
-  const upsert = db.prepare(`
-    INSERT INTO predictions (user_id, stage, match_id, data, updated_at)
-    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-    ON CONFLICT(user_id, stage, match_id) DO UPDATE SET
-      data = excluded.data,
-      updated_at = CURRENT_TIMESTAMP
-  `);
+app.get('/api/users', async (_req, res) => {
   try {
-    db.transaction(() => {
-      for (const p of predictions) upsert.run(user_id, p.stage, p.match_id, JSON.stringify(p.data));
-    })();
-    res.json({ ok: true });
+    const result = await pool.query('SELECT id, name, created_at FROM users ORDER BY name');
+    res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/predictions/:userId', (req, res) => {
-  const rows = db.prepare('SELECT stage, match_id, data FROM predictions WHERE user_id = ?').all(req.params.userId);
-  res.json(rows.map(r => ({ stage: r.stage, match_id: r.match_id, data: JSON.parse(r.data) })));
+// ── Predictions ──────────────────────────────────────────────────────────────
+app.post('/api/predictions/bulk', async (req, res) => {
+  const { user_id, predictions } = req.body;
+  if (!user_id || !Array.isArray(predictions)) return res.status(400).json({ error: 'Missing fields' });
+  
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const upsertQuery = `
+      INSERT INTO predictions (user_id, stage, match_id, data, updated_at)
+      VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+      ON CONFLICT(user_id, stage, match_id) DO UPDATE SET
+        data = EXCLUDED.data,
+        updated_at = CURRENT_TIMESTAMP
+    `;
+    for (const p of predictions) {
+      await client.query(upsertQuery, [user_id, p.stage, p.match_id, JSON.stringify(p.data)]);
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/predictions/:userId', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT stage, match_id, data FROM predictions WHERE user_id = $1', [req.params.userId]);
+    res.json(result.rows.map(r => ({ stage: r.stage, match_id: r.match_id, data: JSON.parse(r.data) })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── Admin ────────────────────────────────────────────────────────────────────
@@ -161,47 +142,54 @@ function checkAdmin(req, res) {
   return true;
 }
 
-app.post('/api/admin/results', (req, res) => {
+app.post('/api/admin/results', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   const { stage, teams } = req.body;
   const valid = ['r32','r16','qf','sf','final','champion'];
   if (!stage || !valid.includes(stage) || teams === undefined) return res.status(400).json({ error: 'Invalid' });
   try {
-    db.prepare(`
+    await pool.query(`
       INSERT INTO actual_results (stage, teams, updated_at)
-      VALUES (?, ?, CURRENT_TIMESTAMP)
-      ON CONFLICT(stage) DO UPDATE SET teams = excluded.teams, updated_at = CURRENT_TIMESTAMP
-    `).run(stage, JSON.stringify(teams));
+      VALUES ($1, $2, CURRENT_TIMESTAMP)
+      ON CONFLICT(stage) DO UPDATE SET teams = EXCLUDED.teams, updated_at = CURRENT_TIMESTAMP
+    `, [stage, JSON.stringify(teams)]);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/admin/results', (req, res) => {
+app.get('/api/admin/results', async (req, res) => {
   if (!checkAdmin(req, res)) return;
-  const rows = db.prepare('SELECT stage, teams, updated_at FROM actual_results').all();
-  const result = {};
-  for (const r of rows) result[r.stage] = { teams: JSON.parse(r.teams), updated_at: r.updated_at };
-  res.json(result);
+  try {
+    const rows = await pool.query('SELECT stage, teams, updated_at FROM actual_results');
+    const result = {};
+    for (const r of rows.rows) result[r.stage] = { teams: JSON.parse(r.teams), updated_at: r.updated_at };
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── Scores ───────────────────────────────────────────────────────────────────
-app.get('/api/scores', (_req, res) => {
+app.get('/api/scores', async (_req, res) => {
   try {
-    const users   = db.prepare('SELECT id, name FROM users').all();
-    const allPreds = db.prepare('SELECT user_id, stage, match_id, data FROM predictions').all()
-      .map(r => ({ ...r, data: JSON.parse(r.data) }));
-    const actual  = {};
-    for (const r of db.prepare('SELECT stage, teams FROM actual_results').all())
-      actual[r.stage] = new Set(Array.isArray(JSON.parse(r.teams)) ? JSON.parse(r.teams) : [JSON.parse(r.teams)]);
+    const usersRes = await pool.query('SELECT id, name FROM users');
+    const predsRes = await pool.query('SELECT user_id, stage, match_id, data FROM predictions');
+    const actualRes = await pool.query('SELECT stage, teams FROM actual_results');
+
+    const users = usersRes.rows;
+    const allPreds = predsRes.rows.map(r => ({ ...r, data: JSON.parse(r.data) }));
+    
+    const actual = {};
+    for (const r of actualRes.rows) {
+      const parsedTeams = JSON.parse(r.teams);
+      actual[r.stage] = new Set(Array.isArray(parsedTeams) ? parsedTeams : [parsedTeams]);
+    }
 
     const scores = users.map(user => {
       const up = allPreds.filter(p => p.user_id === user.id);
 
-      // Groups → R32 (1 pt/team)
       let groups = actual['r32'] ? 0 : null;
       if (actual['r32']) {
         for (const gp of up.filter(p => p.stage === 'groups')) {
-          if (gp.data.first  && actual['r32'].has(gp.data.first))  groups++;
+          if (gp.data.first && actual['r32'].has(gp.data.first)) groups++;
           if (gp.data.second && actual['r32'].has(gp.data.second)) groups++;
         }
         const tp = up.find(p => p.stage === 'third' && p.match_id === 'selections');
@@ -218,11 +206,12 @@ app.get('/api/scores', (_req, res) => {
         return s;
       };
 
-      const r16      = knockoutScore('r16', R32_MATCH_IDS, 2);
-      const qf       = knockoutScore('qf',  R16_MATCH_IDS, 4);
-      const sf       = knockoutScore('sf',  QF_MATCH_IDS,  8);
-      const final    = knockoutScore('final', SF_MATCH_IDS, 16);
-      let   champion = actual['champion'] ? 0 : null;
+      const r16 = knockoutScore('r16', R32_MATCH_IDS, 2);
+      const qf = knockoutScore('qf', R16_MATCH_IDS, 4);
+      const sf = knockoutScore('sf', QF_MATCH_IDS, 8);
+      const final = knockoutScore('final', SF_MATCH_IDS, 16);
+      
+      let champion = actual['champion'] ? 0 : null;
       if (actual['champion']) {
         const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
         if (cp?.data && actual['champion'].has(cp.data)) champion = 32;
@@ -238,22 +227,22 @@ app.get('/api/scores', (_req, res) => {
 });
 
 // ── Delete predictions ────────────────────────────────────────────────────────
-app.delete('/api/admin/predictions/:userId', (req, res) => {
+app.delete('/api/admin/predictions/:userId', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   try {
-    db.prepare('DELETE FROM predictions WHERE user_id = ?').run(req.params.userId);
+    await pool.query('DELETE FROM predictions WHERE user_id = $1', [req.params.userId]);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── Delete user entirely ─────────────────────────────────────────────────────
-app.delete('/api/admin/users/:userId', (req, res) => {
+app.delete('/api/admin/users/:userId', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   try {
-    db.prepare('DELETE FROM predictions WHERE user_id = ?').run(req.params.userId);
-    db.prepare('DELETE FROM users WHERE id = ?').run(req.params.userId);
+    await pool.query('DELETE FROM predictions WHERE user_id = $1', [req.params.userId]);
+    await pool.query('DELETE FROM users WHERE id = $1', [req.params.userId]);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(PORT, () => console.log(`World Cup API running on port ${PORT}`));
+app.listen(PORT, () => console.log(`World Cup Cloud API running safely on port ${PORT}`));
