@@ -53,9 +53,19 @@ export default function Admin() {
 
   const [participants, setParticipants] = useState([]);
   const [userActionStatus, setUserActionStatus] = useState({});
-  const [confirmDialog, setConfirmDialog] = useState(null); // { message, onConfirm }
+  const [confirmDialog, setConfirmDialog] = useState(null);
 
-  const [viewBracket, setViewBracket] = useState(null); // { name, groupPredictions, thirdSelections, knockoutPicks }
+  const [viewBracket, setViewBracket] = useState(null);
+
+  // Default every single configuration track to 'live' editing on launch
+  const [adminMode, setAdminMode] = useState({
+    r32: 'live',
+    r16: 'live',
+    qf: 'live',
+    sf: 'live',
+    final: 'live',
+    champion: 'live'
+  });
 
   function askConfirm(message, onConfirm) {
     setConfirmDialog({ message, onConfirm });
@@ -72,40 +82,73 @@ export default function Admin() {
     }
   }
 
-  useEffect(() => {
-    if (!authed) return;
+  const loadData = () => {
     getActualResults(pwInput)
       .then(data => {
         setSavedResults(data);
         const init = {};
-        for (const [stage, val] of Object.entries(data))
-          init[stage] = new Set(Array.isArray(val.teams) ? val.teams : [val.teams]);
+        STAGE_CONFIG.forEach(stage => {
+          const mode = adminMode[stage.key] || 'live';
+          const dbKey = mode === 'live' ? `live_${stage.key}` : stage.key;
+          const val = data[dbKey];
+          init[stage.key] = new Set(val ? (Array.isArray(val.teams) ? val.teams : [val.teams]) : []);
+        });
         setSelections(init);
       })
       .catch(() => {});
+  };
+
+  useEffect(() => {
+    if (!authed) return;
+    loadData();
     getUsers().then(setParticipants).catch(() => {});
   }, [authed]);
 
-  function toggleTeam(stage, team) {
+  // Synchronize input fields accurately when an admin switches views
+  useEffect(() => {
+    if (!authed) return;
+    const init = {};
+    STAGE_CONFIG.forEach(stage => {
+      const mode = adminMode[stage.key] || 'live';
+      const dbKey = mode === 'live' ? `live_${stage.key}` : stage.key;
+      const val = savedResults[dbKey];
+      init[stage.key] = new Set(val ? (Array.isArray(val.teams) ? val.teams : [val.teams]) : []);
+    });
+    setSelections(init);
+  }, [adminMode, savedResults, authed]);
+
+  function toggleTeam(stageKey, team) {
     setSelections(prev => {
-      const current = new Set(prev[stage] || []);
+      const current = new Set(prev[stageKey] || []);
       current.has(team) ? current.delete(team) : current.add(team);
-      return { ...prev, [stage]: current };
+      return { ...prev, [stageKey]: current };
     });
   }
 
-  async function handleSave(stageKey, required) {
+  function toggleAdminMode(stageKey, mode) {
+    setAdminMode(prev => ({ ...prev, [stageKey]: mode }));
+  }
+
+  async function handleSave(stageKey, required, isLiveSave) {
     const sel = selections[stageKey] || new Set();
-    if (sel.size !== required) return;
-    setSaveStatus(prev => ({ ...prev, [stageKey]: 'saving' }));
+    
+    if (!isLiveSave && sel.size !== required) {
+      alert(`Cannot lock official results. You must select exactly ${required} teams.`);
+      return;
+    }
+
+    const dbKey = isLiveSave ? `live_${stageKey}` : stageKey;
+    setSaveStatus(prev => ({ ...prev, [dbKey]: 'saving' }));
+
     try {
       const teams = stageKey === 'champion' ? [...sel][0] : [...sel];
-      await saveActualResults(pwInput, stageKey, teams);
-      setSavedResults(prev => ({ ...prev, [stageKey]: { teams, updated_at: new Date().toISOString() } }));
-      setSaveStatus(prev => ({ ...prev, [stageKey]: 'saved' }));
-      setTimeout(() => setSaveStatus(prev => ({ ...prev, [stageKey]: '' })), 2500);
+      await saveActualResults(pwInput, dbKey, teams);
+      
+      setSavedResults(prev => ({ ...prev, [dbKey]: { teams, updated_at: new Date().toISOString() } }));
+      setSaveStatus(prev => ({ ...prev, [dbKey]: 'saved' }));
+      setTimeout(() => setSaveStatus(prev => ({ ...prev, [dbKey]: '' })), 2500);
     } catch {
-      setSaveStatus(prev => ({ ...prev, [stageKey]: 'error' }));
+      setSaveStatus(prev => ({ ...prev, [dbKey]: 'error' }));
     }
   }
 
@@ -200,10 +243,7 @@ export default function Admin() {
                     </span>
                   </div>
                   <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-                    <button
-                      className="btn btn-sm btn-ghost"
-                      onClick={() => handleViewBracket(u)}
-                    >
+                    <button className="btn btn-sm btn-ghost" onClick={() => handleViewBracket(u)}>
                       View Bracket
                     </button>
                     <button
@@ -275,47 +315,102 @@ export default function Admin() {
       {/* ── Stage Results ── */}
       {STAGE_CONFIG.map(({ key, label, count, pts }) => {
         const sel = selections[key] || new Set();
-        const saved = savedResults[key];
-        const status = saveStatus[key];
-        const isReady = sel.size === count;
+        const currentMode = adminMode[key] || 'live';
+        const activeDbKey = currentMode === 'live' ? `live_${key}` : key;
+        const saved = savedResults[activeDbKey];
+        const status = saveStatus[activeDbKey];
+        const isOfficialReady = sel.size === count;
 
         return (
           <div key={key} style={{
             background: 'var(--surface)', border: '1px solid var(--border)',
             borderRadius: 10, padding: 20, marginBottom: 20,
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
               <div>
-                <div style={{ fontWeight: 700, fontSize: 15 }}>{label}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 2 }}>
-                  Select exactly {count} team{count > 1 ? 's' : ''} ({pts} pt{pts > 1 ? 's' : ''} each)
+                <div style={{ fontSize: 16, fontWeight: 700 }}>{label}</div>
+                
+                {/* Fixed Mode Selector Tabs */}
+                <div style={{ display: 'inline-flex', background: 'var(--surface2)', padding: 4, borderRadius: 6, marginTop: 8, border: '1px solid var(--border)' }}>
+                  <button 
+                    type="button"
+                    onClick={() => toggleAdminMode(key, 'live')}
+                    style={{
+                      padding: '6px 14px', border: 'none', borderRadius: 4, fontSize: 12, cursor: 'pointer',
+                      background: currentMode === 'live' ? '#0070f3' : 'transparent',
+                      color: currentMode === 'live' ? '#fff' : '#888',
+                      fontWeight: currentMode === 'live' ? 700 : 400
+                    }}
+                  >
+                    ⚡ Edit Live Trend
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={() => toggleAdminMode(key, 'official')}
+                    style={{
+                      padding: '6px 14px', border: 'none', borderRadius: 4, fontSize: 12, cursor: 'pointer',
+                      background: currentMode === 'official' ? '#e5a93b' : 'transparent',
+                      color: currentMode === 'official' ? '#000' : '#888',
+                      fontWeight: currentMode === 'official' ? 700 : 400
+                    }}
+                  >
+                    🏆 Edit Official
+                  </button>
+                </div>
+
+                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8 }}>
+                  {currentMode === 'live' 
+                    ? `Select any number of teams currently qualifying right now (${pts} pt each).`
+                    : `Select exactly ${count} finalized qualifying teams (${pts} pt each).`
+                  }
                   {saved && (
                     <span style={{ marginLeft: 8, color: 'var(--green)' }}>
-                      — Last saved: {new Date(saved.updated_at).toLocaleString()}
+                      — Saved: {new Date(saved.updated_at).toLocaleTimeString()}
                     </span>
                   )}
                 </div>
               </div>
+
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontSize: 13, fontWeight: 700, color: isReady ? 'var(--green)' : 'var(--text-dim)' }}>
-                  {sel.size} / {count}
+                <span style={{ fontSize: 13, fontWeight: 700, color: (currentMode === 'live' || isOfficialReady) ? 'var(--green)' : 'var(--red)' }}>
+                  {sel.size} {currentMode === 'official' && `/ ${count}`}
                 </span>
-                <button className="btn btn-green btn-sm" disabled={!isReady || status === 'saving'}
-                  onClick={() => handleSave(key, count)} style={{ opacity: isReady ? 1 : 0.5 }}>
-                  {status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved!' : 'Save'}
-                </button>
+                
+                {currentMode === 'live' ? (
+                  <button 
+                    type="button"
+                    className="btn btn-blue btn-sm" 
+                    disabled={status === 'saving'}
+                    onClick={() => handleSave(key, count, true)}
+                    style={{ background: '#0070f3', color: '#fff' }}
+                  >
+                    {status === 'saving' ? 'Saving Live…' : status === 'saved' ? 'Live Saved!' : 'Save Live Trend ⚡'}
+                  </button>
+                ) : (
+                  <button 
+                    type="button"
+                    className="btn btn-green btn-sm" 
+                    disabled={!isOfficialReady || status === 'saving'}
+                    onClick={() => handleSave(key, count, false)}
+                    style={{ opacity: isOfficialReady ? 1 : 0.5, background: '#e5a93b', color: '#000' }}
+                  >
+                    {status === 'saving' ? 'Locking…' : status === 'saved' ? 'Locked!' : 'Lock Official 🏆'}
+                  </button>
+                )}
               </div>
             </div>
-            {status === 'error' && <div className="error" style={{ marginBottom: 8 }}>Failed to save.</div>}
+
+            {status === 'error' && <div className="error" style={{ marginBottom: 8 }}>Failed to update database.</div>}
+            
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 6 }}>
               {ALL_TEAM_NAMES.map(team => {
                 const isSelected = sel.has(team);
                 const teamData = ALL_TEAMS.find(t => t.name === team);
                 return (
-                  <button key={team} onClick={() => toggleTeam(key, team)} style={{
+                  <button key={team} type="button" onClick={() => toggleTeam(key, team)} style={{
                     display: 'flex', alignItems: 'center', gap: 7, padding: '7px 10px',
-                    background: isSelected ? 'rgba(60,172,59,.15)' : 'var(--surface2)',
-                    border: `1px solid ${isSelected ? 'var(--green)' : 'var(--border)'}`,
+                    background: isSelected ? (currentMode === 'live' ? 'rgba(0,112,243,0.15)' : 'rgba(229,169,59,0.15)') : 'var(--surface2)',
+                    border: `1px solid ${isSelected ? (currentMode === 'live' ? '#0070f3' : '#e5a93b') : 'var(--border)'}`,
                     borderRadius: 'var(--radius)', cursor: 'pointer',
                     color: isSelected ? 'var(--text)' : 'var(--text-dim)',
                     fontSize: 12, fontWeight: isSelected ? 700 : 400,
@@ -323,7 +418,7 @@ export default function Admin() {
                   }}>
                     <span style={{ fontSize: 16, lineHeight: 1 }}>{teamData?.flag || '🏳️'}</span>
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{team}</span>
-                    {isSelected && <span style={{ color: 'var(--green)', fontSize: 14 }}>✓</span>}
+                    {isSelected && <span style={{ color: currentMode === 'live' ? '#0070f3' : '#e5a93b', fontSize: 14 }}>✓</span>}
                   </button>
                 );
               })}
@@ -359,24 +454,15 @@ export default function Admin() {
       {/* ── Bracket Viewer Modal ── */}
       {viewBracket && (
         <div className="modal-overlay" onClick={() => setViewBracket(null)}>
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{
+          <div onClick={e => e.stopPropagation()} style={{
               background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 14,
               width: '96vw', maxHeight: '92vh', overflow: 'auto',
               padding: '24px 20px', boxShadow: '0 24px 60px rgba(0,0,0,.8)',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
-              <div style={{ fontSize: 18, fontWeight: 700 }}>
-                {viewBracket.name}'s Bracket
-              </div>
-              <button
-                onClick={() => setViewBracket(null)}
-                style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: 20, lineHeight: 1 }}
-              >
-                ✕
-              </button>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>{viewBracket.name}'s Bracket</div>
+              <button onClick={() => setViewBracket(null)} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: 20, lineHeight: 1 }}>✕</button>
             </div>
             {viewBracket.loading ? (
               <div className="empty-state">Loading…</div>
