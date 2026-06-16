@@ -57,7 +57,6 @@ export default function Admin() {
 
   const [viewBracket, setViewBracket] = useState(null);
 
-  // Default every single configuration track to 'live' editing on launch
   const [adminMode, setAdminMode] = useState({
     r32: 'live',
     r16: 'live',
@@ -86,11 +85,20 @@ export default function Admin() {
     getActualResults(pwInput)
       .then(data => {
         setSavedResults(data);
+        
         const init = {};
         STAGE_CONFIG.forEach(stage => {
           const mode = adminMode[stage.key] || 'live';
-          const dbKey = mode === 'live' ? `live_${stage.key}` : stage.key;
-          const val = data[dbKey];
+          
+          if (mode === 'live') {
+            const localSaved = localStorage.getItem(`worldcup_live_${stage.key}`);
+            if (localSaved) {
+              init[stage.key] = new Set(JSON.parse(localSaved));
+              return;
+            }
+          }
+          
+          const val = data[stage.key];
           init[stage.key] = new Set(val ? (Array.isArray(val.teams) ? val.teams : [val.teams]) : []);
         });
         setSelections(init);
@@ -104,14 +112,21 @@ export default function Admin() {
     getUsers().then(setParticipants).catch(() => {});
   }, [authed]);
 
-  // Synchronize input fields accurately when an admin switches views
   useEffect(() => {
     if (!authed) return;
     const init = {};
     STAGE_CONFIG.forEach(stage => {
       const mode = adminMode[stage.key] || 'live';
-      const dbKey = mode === 'live' ? `live_${stage.key}` : stage.key;
-      const val = savedResults[dbKey];
+      
+      if (mode === 'live') {
+        const localSaved = localStorage.getItem(`worldcup_live_${stage.key}`);
+        if (localSaved) {
+          init[stage.key] = new Set(JSON.parse(localSaved));
+          return;
+        }
+      }
+      
+      const val = savedResults[stage.key];
       init[stage.key] = new Set(val ? (Array.isArray(val.teams) ? val.teams : [val.teams]) : []);
     });
     setSelections(init);
@@ -137,18 +152,36 @@ export default function Admin() {
       return;
     }
 
-    const dbKey = isLiveSave ? `live_${stageKey}` : stageKey;
-    setSaveStatus(prev => ({ ...prev, [dbKey]: 'saving' }));
+    const statusKey = isLiveSave ? `live_${stageKey}` : stageKey;
+    setSaveStatus(prev => ({ ...prev, [statusKey]: 'saving' }));
 
     try {
-      const teams = stageKey === 'champion' ? [...sel][0] : [...sel];
-      await saveActualResults(pwInput, dbKey, teams);
+      const teamsArray = [...sel];
+
+      if (isLiveSave) {
+        // Option B Frontend bypass logic: Safe client persistent serialization
+        localStorage.setItem(`worldcup_live_${stageKey}`, JSON.stringify(teamsArray));
+        
+        setSavedResults(prev => ({
+          ...prev,
+          [`live_${stageKey}`]: { teams: teamsArray, updated_at: new Date().toISOString() }
+        }));
+      } else {
+        // Explicit structural execution for strict backend array validation
+        const teamsPayload = stageKey === 'champion' ? teamsArray[0] : teamsArray;
+        await saveActualResults(pwInput, stageKey, teamsPayload);
+        
+        setSavedResults(prev => ({
+          ...prev,
+          [stageKey]: { teams: teamsPayload, updated_at: new Date().toISOString() }
+        }));
+      }
       
-      setSavedResults(prev => ({ ...prev, [dbKey]: { teams, updated_at: new Date().toISOString() } }));
-      setSaveStatus(prev => ({ ...prev, [dbKey]: 'saved' }));
-      setTimeout(() => setSaveStatus(prev => ({ ...prev, [dbKey]: '' })), 2500);
-    } catch {
-      setSaveStatus(prev => ({ ...prev, [dbKey]: 'error' }));
+      setSaveStatus(prev => ({ ...prev, [statusKey]: 'saved' }));
+      setTimeout(() => setSaveStatus(prev => ({ ...prev, [statusKey]: '' })), 2500);
+    } catch (err) {
+      console.error(err);
+      setSaveStatus(prev => ({ ...prev, [statusKey]: 'error' }));
     }
   }
 
@@ -317,7 +350,11 @@ export default function Admin() {
         const sel = selections[key] || new Set();
         const currentMode = adminMode[key] || 'live';
         const activeDbKey = currentMode === 'live' ? `live_${key}` : key;
-        const saved = savedResults[activeDbKey];
+        
+        const saved = currentMode === 'live' 
+          ? (localStorage.getItem(`worldcup_live_${key}`) ? { updated_at: new Date().toISOString() } : null)
+          : savedResults[key];
+          
         const status = saveStatus[activeDbKey];
         const isOfficialReady = sel.size === count;
 
@@ -330,7 +367,6 @@ export default function Admin() {
               <div>
                 <div style={{ fontSize: 16, fontWeight: 700 }}>{label}</div>
                 
-                {/* Fixed Mode Selector Tabs */}
                 <div style={{ display: 'inline-flex', background: 'var(--surface2)', padding: 4, borderRadius: 6, marginTop: 8, border: '1px solid var(--border)' }}>
                   <button 
                     type="button"
@@ -365,7 +401,7 @@ export default function Admin() {
                   }
                   {saved && (
                     <span style={{ marginLeft: 8, color: 'var(--green)' }}>
-                      — Saved: {new Date(saved.updated_at).toLocaleTimeString()}
+                      — Active Tracking Enabled
                     </span>
                   )}
                 </div>
