@@ -147,8 +147,17 @@ function checkAdmin(req, res) {
 app.post('/api/admin/results', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   const { stage, teams } = req.body;
-  const valid = ['r32','r16','qf','sf','final','champion'];
-  if (!stage || !valid.includes(stage) || teams === undefined) return res.status(400).json({ error: 'Invalid' });
+  
+  // Accept both strict official strings and live trending prefixes
+  const valid = [
+    'r32', 'r16', 'qf', 'sf', 'final', 'champion',
+    'live_r32', 'live_r16', 'live_qf', 'live_sf', 'live_final', 'live_champion'
+  ];
+
+  if (!stage || !valid.includes(stage) || teams === undefined) {
+    return res.status(400).json({ error: 'Invalid stage or missing team data' });
+  }
+
   try {
     await pool.query(`
       INSERT INTO actual_results (stage, teams, updated_at)
@@ -156,7 +165,9 @@ app.post('/api/admin/results', async (req, res) => {
       ON CONFLICT(stage) DO UPDATE SET teams = EXCLUDED.teams, updated_at = CURRENT_TIMESTAMP
     `, [stage, JSON.stringify(teams)]);
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 app.get('/api/admin/results', async (req, res) => {

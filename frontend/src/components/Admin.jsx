@@ -89,23 +89,10 @@ export default function Admin() {
         const init = {};
         STAGE_CONFIG.forEach(stage => {
           const mode = adminMode[stage.key] || 'live';
-          const dbRow = data[stage.key];
+          const lookupKey = mode === 'live' ? `live_${stage.key}` : stage.key;
+          const val = data[lookupKey];
           
-          let teamsList = [];
-          if (dbRow && dbRow.teams) {
-            // Handle if the data is our complex live trend payload format
-            if (dbRow.teams.isLiveTrend) {
-              if (mode === 'live') {
-                teamsList = dbRow.teams.teams || [];
-              }
-            } else {
-              // Standard database row structure format
-              if (mode === 'official') {
-                teamsList = Array.isArray(dbRow.teams) ? dbRow.teams : [dbRow.teams];
-              }
-            }
-          }
-          init[stage.key] = new Set(teamsList);
+          init[stage.key] = new Set(val ? (Array.isArray(val.teams) ? val.teams : [val.teams]) : []);
         });
         setSelections(init);
       })
@@ -123,17 +110,10 @@ export default function Admin() {
     const init = {};
     STAGE_CONFIG.forEach(stage => {
       const mode = adminMode[stage.key] || 'live';
-      const dbRow = savedResults[stage.key];
+      const lookupKey = mode === 'live' ? `live_${stage.key}` : stage.key;
+      const val = savedResults[lookupKey];
       
-      let teamsList = [];
-      if (dbRow && dbRow.teams) {
-        if (dbRow.teams.isLiveTrend) {
-          if (mode === 'live') teamsList = dbRow.teams.teams || [];
-        } else {
-          if (mode === 'official') teamsList = Array.isArray(dbRow.teams) ? dbRow.teams : [dbRow.teams];
-        }
-      }
-      init[stage.key] = new Set(teamsList);
+      init[stage.key] = new Set(val ? (Array.isArray(val.teams) ? val.teams : [val.teams]) : []);
     });
     setSelections(init);
   }, [adminMode, savedResults, authed]);
@@ -158,38 +138,28 @@ export default function Admin() {
       return;
     }
 
-    const statusKey = isLiveSave ? `live_${stageKey}` : stageKey;
+    const targetKey = isLiveSave ? `live_${stageKey}` : stageKey;
     
-    // Clear out any old lingering error states immediately on click!
-    setSaveStatus(prev => ({ ...prev, [statusKey]: 'saving' }));
+    // Explicitly reset the status dictionary to wipe prior error banners instantly
+    setSaveStatus(prev => ({ ...prev, [targetKey]: 'saving' }));
 
     try {
       const teamsArray = [...sel];
-      let teamsPayload;
-
-      if (isLiveSave) {
-        // Safe database bypass payload wrapping inside valid stage strings
-        teamsPayload = {
-          isLiveTrend: true,
-          teams: teamsArray
-        };
-      } else {
-        teamsPayload = stageKey === 'champion' ? teamsArray[0] : teamsArray;
-      }
-
-      // Sends using standard approved keys ('r32', etc.) to seamlessly clear checks!
-      await saveActualResults(pwInput, stageKey, teamsPayload);
+      const teamsPayload = stageKey === 'champion' ? teamsArray[0] : teamsArray;
+      
+      // Save directly to backend database using the modified stageKey
+      await saveActualResults(pwInput, targetKey, teamsPayload);
       
       setSavedResults(prev => ({
         ...prev,
-        [stageKey]: { teams: teamsPayload, updated_at: new Date().toISOString() }
+        [targetKey]: { teams: teamsPayload, updated_at: new Date().toISOString() }
       }));
       
-      setSaveStatus(prev => ({ ...prev, [statusKey]: 'saved' }));
-      setTimeout(() => setSaveStatus(prev => ({ ...prev, [statusKey]: '' })), 2500);
+      setSaveStatus(prev => ({ ...prev, [targetKey]: 'saved' }));
+      setTimeout(() => setSaveStatus(prev => ({ ...prev, [targetKey]: '' })), 2500);
     } catch (err) {
       console.error(err);
-      setSaveStatus(prev => ({ ...prev, [statusKey]: 'error' }));
+      setSaveStatus(prev => ({ ...prev, [targetKey]: 'error' }));
     }
   }
 
@@ -359,11 +329,7 @@ export default function Admin() {
         const currentMode = adminMode[key] || 'live';
         const activeDbKey = currentMode === 'live' ? `live_${key}` : key;
         
-        const dbRow = savedResults[key];
-        const hasActiveData = dbRow && dbRow.teams && (
-          currentMode === 'live' ? dbRow.teams.isLiveTrend : !dbRow.teams.isLiveTrend
-        );
-          
+        const saved = savedResults[activeDbKey];
         const status = saveStatus[activeDbKey];
         const isOfficialReady = sel.size === count;
 
@@ -408,9 +374,9 @@ export default function Admin() {
                     ? `Select any number of teams currently qualifying right now (${pts} pt each).`
                     : `Select exactly ${count} finalized qualifying teams (${pts} pt each).`
                   }
-                  {hasActiveData && (
+                  {saved && (
                     <span style={{ marginLeft: 8, color: 'var(--green)' }}>
-                      — Active Tracking Enabled
+                      — Live Data Saved to Database
                     </span>
                   )}
                 </div>
