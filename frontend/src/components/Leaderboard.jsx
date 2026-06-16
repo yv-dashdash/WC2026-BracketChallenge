@@ -1,94 +1,127 @@
 import { useState, useEffect } from 'react';
-import { getActualResults, getUsers, loadPredictions } from '../api';
+import { getScores, getActualResults, loadPredictions } from '../api';
 
-const STAGE_PTS = { r32: 1, r16: 2, qf: 4, sf: 8, final: 16, champion: 32 };
+const STAGE_CONFIGS = [
+  { key: 'r32', weight: 1 },
+  { key: 'r16', weight: 2 },
+  { key: 'qf',  weight: 4 },
+  { key: 'sf',  weight: 8 },
+  { key: 'final', weight: 16 },
+  { key: 'champion', weight: 32 }
+];
 
 export default function Leaderboard({ currentUser, onSelectUser }) {
   const [boardMode, setBoardMode] = useState('live'); // 'live' or 'official'
-  const [leaderboardData, setLeaderboardData] = useState([]);
+  const [participants, setParticipants] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    async function calculateLeaderboards() {
+    async function loadLeaderboardSystem() {
       try {
-        const [actualData, participants] = await Promise.all([
-          getActualResults(''), 
-          getUsers()
-        ]);
+        // Step 1: Immediately fetch the official scores and user listings safely
+        const baseScores = await getScores();
+        
+        // Setup initial display array so names appear instantly
+        const initialList = baseScores.map(p => ({
+          user_id: p.user_id,
+          user_name: p.user_name,
+          official_score: p.total_points || 0,
+          live_score: p.total_points || 0 // Default fallback until live matches are processed
+        }));
+        
+        setParticipants(initialList);
 
-        const officialTruth = {};
-        const liveTruth = {};
-
-        Object.keys(STAGE_PTS).forEach(stage => {
-          const offTeams = actualData[stage]?.teams;
-          officialTruth[stage] = new Set(Array.isArray(offTeams) ? offTeams : offTeams ? [offTeams] : []);
-
-          const liveTeams = actualData[`live_${stage}`]?.teams;
-          liveTruth[stage] = new Set(Array.isArray(liveTeams) ? liveTeams : liveTeams ? [liveTeams] : []);
+        // Step 2: Fetch actual tournament targets to calculate live variance on the fly
+        const actualData = await getActualResults('').catch(() => ({}));
+        
+        // Find which stages have active "Live Trend" tracking entries in the DB
+        const activeLiveStages = STAGE_CONFIGS.filter(stage => {
+          const liveTeams = actualData[`live_${stage.key}`]?.teams;
+          return Array.isArray(liveTeams) && liveTeams.length > 0;
         });
 
-        const calculatedUsers = await Promise.all(
-          participants.map(async (user) => {
-            let officialPoints = 0;
-            let livePoints = 0;
+        // If no custom live trend data has been entered by the admin yet, we are done!
+        if (activeLiveStages.length === 0) {
+          setLoading(false);
+          return;
+        }
+
+        // Build quick lookup structures for active live matching values
+        const liveTruthMap = {};
+        activeLiveStages.forEach(stage => {
+          const teams = actualData[`live_${stage.key}`]?.teams;
+          liveTruthMap[stage.key] = new Set(teams);
+        });
+
+        // Step 3: Sequentially check user arrays to calculate Live variations cleanly
+        const updatedList = await Promise.all(
+          initialList.map(async (player) => {
+            let calculatedLivePoints = 0;
 
             try {
-              const predictions = await loadPredictions(user.id);
-              
+              const predictions = await loadPredictions(player.user_id);
+
               predictions.forEach(row => {
-                if (row.stage === 'groups' && row.data) {
+                // Check live points matching for group selections
+                if (row.stage === 'groups' && row.data && liveTruthMap['r32']) {
                   const predictedTeams = Object.values(row.data).filter(Boolean);
-                  
                   predictedTeams.forEach(team => {
-                    if (officialTruth['r32'].has(team)) officialPoints += STAGE_PTS['r32'];
-                    if (liveTruth['r32'].has(team)) livePoints += STAGE_PTS['r32'];
+                    if (liveTruthMap['r32'].has(team)) {
+                      calculatedLivePoints += 1; // 1 point per correct r32 team
+                    }
                   });
                 }
-                
+
+                // Check live points matching for direct knockout stages
                 if (row.stage === 'knockout' && row.data) {
-                  const targetStage = row.match_id; 
+                  const targetStage = row.match_id; // 'r16', 'qf', etc.
                   const chosenTeam = row.data;
-                  if (chosenTeam && STAGE_PTS[targetStage]) {
-                    if (officialTruth[targetStage].has(chosenTeam)) officialPoints += STAGE_PTS[targetStage];
-                    if (liveTruth[targetStage].has(chosenTeam)) livePoints += STAGE_PTS[targetStage];
+                  if (chosenTeam && liveTruthMap[targetStage] && liveTruthMap[targetStage].has(chosenTeam)) {
+                    const stageWeight = STAGE_CONFIGS.find(s => s.key === targetStage)?.weight || 0;
+                    calculatedLivePoints += stageWeight;
                   }
                 }
               });
-            } catch (e) {
-              console.error(e);
+            } catch (err) {
+              console.error(`Could not evaluate live variance for user: ${player.user_name}`, err);
+              return player; // Fallback to safe defaults if connection drops
             }
 
             return {
-              user_id: user.id,
-              user_name: user.name,
-              official_score: officialPoints,
-              live_score: livePoints,
+              ...player,
+              live_score: calculatedLivePoints
             };
           })
         );
 
-        setLeaderboardData(calculatedUsers);
+        setParticipants(updatedList);
         setLoading(false);
-      } catch (err) {
-        console.error(err);
+      } catch (globalError) {
+        console.error("Leaderboard component loading error:", globalError);
         setLoading(false);
       }
     }
 
-    calculateLeaderboards();
+    loadLeaderboardSystem();
   }, []);
 
-  if (loading) return <div className="leaderboard-loading">Loading standings...</div>;
+  if (loading && participants.length === 0) {
+    return <div className="leaderboard-loading">Loading standings...</div>;
+  }
 
-  const sortedScores = [...leaderboardData].sort((a, b) => {
-    return boardMode === 'live' 
-      ? b.live_score - a.live_score || b.official_score - a.official_score
-      : b.official_score - a.official_score || b.live_score - a.live_score;
+  // Sort dynamically depending on what tab view toggle is checked
+  const sortedParticipants = [...participants].sort((a, b) => {
+    if (boardMode === 'live') {
+      return b.live_score - a.live_score || b.official_score - a.official_score;
+    } else {
+      return b.official_score - a.official_score || b.live_score - a.live_score;
+    }
   });
 
   return (
     <div className="leaderboard-card">
       
+      {/* Tab Controls */}
       <div style={{ 
         display: 'flex', 
         background: 'var(--surface2)', 
@@ -105,7 +138,7 @@ export default function Leaderboard({ currentUser, onSelectUser }) {
             background: boardMode === 'live' ? '#0070f3' : 'transparent',
             color: boardMode === 'live' ? '#fff' : '#888',
             fontWeight: boardMode === 'live' ? 'bold' : 'normal',
-            transition: 'all 0.2s'
+            transition: 'all 0.15s'
           }}
         >
           ⚡ Live Trend (Real-time)
@@ -118,7 +151,7 @@ export default function Leaderboard({ currentUser, onSelectUser }) {
             background: boardMode === 'official' ? '#e5a93b' : 'transparent',
             color: boardMode === 'official' ? '#000' : '#888',
             fontWeight: boardMode === 'official' ? 'bold' : 'normal',
-            transition: 'all 0.2s'
+            transition: 'all 0.15s'
           }}
         >
           🏆 Official Standings (Locked)
@@ -136,7 +169,7 @@ export default function Leaderboard({ currentUser, onSelectUser }) {
           </tr>
         </thead>
         <tbody>
-          {sortedScores.map((row, i) => {
+          {sortedParticipants.map((row, i) => {
             const isMe = currentUser && row.user_id === currentUser.id;
             const displayScore = boardMode === 'live' ? row.live_score : row.official_score;
             
@@ -162,10 +195,10 @@ export default function Leaderboard({ currentUser, onSelectUser }) {
               </tr>
             );
           })}
-          {sortedScores.length === 0 && (
+          {sortedParticipants.length === 0 && (
             <tr>
               <td colSpan="3" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-dim)' }}>
-                No predictions submitted yet. Be the first!
+                No predictions submitted yet.
               </td>
             </tr>
           )}
