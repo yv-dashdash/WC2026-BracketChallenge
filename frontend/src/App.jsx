@@ -58,6 +58,10 @@ export default function App() {
   });
   const [showPicker, setShowPicker] = useState(false);
 
+  // States for viewing other participants' predictions
+  const [viewingUser, setViewingUser] = useState(null);
+  const [isReadOnly, setIsReadOnly] = useState(false);
+
   const [groupPredictions, setGroupPredictions] = useState(DEFAULT_GROUP_PRED());
   const [thirdSelections, setThirdSelections] = useState([]);
   const [knockoutPicks, setKnockoutPicks] = useState({});
@@ -78,21 +82,23 @@ export default function App() {
     getUsers().then(users => setParticipantCount(users.length)).catch(() => {});
   }, [view]); // refresh when returning to leaderboard
 
-  // Load predictions when user changes
+  // Load predictions when user OR inspected user changes
   useEffect(() => {
-    if (!user) return;
-    loadPredictions(user.id).then(rows => {
+    const targetUserId = viewingUser ? viewingUser.id : user?.id;
+    if (!targetUserId) return;
+
+    loadPredictions(targetUserId).then(rows => {
       const { groupPredictions: gp, thirdSelections: ts, knockoutPicks: kp } = payloadToPreds(rows);
       setGroupPredictions(gp);
       setThirdSelections(ts);
       setKnockoutPicks(kp);
       dirtyRef.current = false;
     });
-  }, [user]);
+  }, [user, viewingUser]);
 
-  // Auto-save (debounced)
+  // Auto-save (debounced) - Only active if NOT in read-only mode
   const triggerSave = useCallback(() => {
-    if (!user || !dirtyRef.current) return;
+    if (!user || !dirtyRef.current || isReadOnly) return;
     clearTimeout(saveTimer.current);
     setSaveStatus('saving');
     saveTimer.current = setTimeout(async () => {
@@ -105,28 +111,50 @@ export default function App() {
         setSaveStatus('idle');
       }
     }, 800);
-  }, [user, groupPredictions, thirdSelections, knockoutPicks]);
+  }, [user, groupPredictions, thirdSelections, knockoutPicks, isReadOnly]);
 
   useEffect(() => {
-    if (user && dirtyRef.current) triggerSave();
-  }, [groupPredictions, thirdSelections, knockoutPicks]);
+    if (user && dirtyRef.current && !isReadOnly) triggerSave();
+  }, [groupPredictions, thirdSelections, knockoutPicks, isReadOnly]);
 
   const handleGroupChange = (group, pred) => {
+    if (isReadOnly) return;
     dirtyRef.current = true;
     setGroupPredictions(prev => ({ ...prev, [group]: pred }));
   };
   const handleThirdChange = (sel) => {
+    if (isReadOnly) return;
     dirtyRef.current = true;
     setThirdSelections(sel);
   };
   const handleKnockoutPick = (matchId, winner) => {
+    if (isReadOnly) return;
     dirtyRef.current = true;
     setKnockoutPicks(prev => clearDownstream(matchId, { ...prev, [matchId]: winner }));
   };
 
   const openEditor = () => {
     if (!user) { setShowPicker(true); }
-    else { setView('bracket'); setEditorTab('groups'); }
+    else { 
+      setViewingUser(null);
+      setIsReadOnly(false);
+      setView('bracket'); 
+      setEditorTab('groups'); 
+    }
+  };
+
+  // Click handler to open someone else's bracket from Leaderboard
+  const handleSelectUser = (selectedUser) => {
+    setViewingUser(selectedUser);
+    setIsReadOnly(true);
+    setView('bracket');
+    setEditorTab('groups');
+  };
+
+  const handleBackToLeaderboard = () => {
+    setViewingUser(null);
+    setIsReadOnly(false);
+    setView('leaderboard');
   };
 
   // ── Random fill helpers ──────────────────────────────────────────────────────
@@ -140,6 +168,7 @@ export default function App() {
   };
 
   const randomizeGroups = () => {
+    if (isReadOnly) return;
     const next = {};
     for (const g of GROUP_NAMES) {
       const names = shuffle(GROUPS[g].teams.map(t => t.name));
@@ -150,12 +179,14 @@ export default function App() {
   };
 
   const randomizeThird = () => {
+    if (isReadOnly) return;
     const thirds = GROUP_NAMES.map(g => groupPredictions[g]?.third).filter(Boolean);
     dirtyRef.current = true;
     setThirdSelections(shuffle(thirds).slice(0, 8));
   };
 
   const randomizeBracket = () => {
+    if (isReadOnly) return;
     const rWin = (a, b) => a && b ? (Math.random() < 0.5 ? a : b) : (a || b || null);
     const resolveSeed = (seed) => {
       if (!seed) return null;
@@ -188,6 +219,7 @@ export default function App() {
   };
 
   const handleConfirmSubmit = async () => {
+    if (isReadOnly) return;
     if (user) {
       try {
         const payload = predsToPayload(groupPredictions, thirdSelections, knockoutPicks);
@@ -201,6 +233,8 @@ export default function App() {
   };
 
   const handlePickerSelect = (u) => {
+    setViewingUser(null);
+    setIsReadOnly(false);
     setUser(u);
     setShowPicker(false);
     setView('bracket');
@@ -210,7 +244,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="header">
-        <div className="header-logo">
+        <div className="header-logo" onClick={handleBackToLeaderboard} style={{ cursor: 'pointer' }}>
           <div><span className="logo-wc">FIFA</span>&nbsp;<span className="logo-year">2026</span></div>
           <div className="logo-byline">(v1.1)</div>
         </div>
@@ -237,12 +271,12 @@ export default function App() {
             </>
           )}
           {view === 'bracket' && (
-            <button className="btn-back" onClick={() => setView('leaderboard')}>
+            <button className="btn-back" onClick={handleBackToLeaderboard}>
               ← Leaderboard
             </button>
           )}
           {view === 'admin' && (
-            <button className="btn-back" onClick={() => setView('leaderboard')}>
+            <button className="btn-back" onClick={handleBackToLeaderboard}>
               ← Leaderboard
             </button>
           )}
@@ -336,7 +370,7 @@ export default function App() {
               </div>
             </div>
 
-            <Leaderboard currentUser={user} />
+            <Leaderboard currentUser={user} onSelectUser={handleSelectUser} />
           </div>
         )}
 
@@ -360,26 +394,33 @@ export default function App() {
                   );
                 })}
                 <div className="step-divider" />
-                <button className="step-btn step-submit" onClick={() => setShowConfirm(true)}>
-                  <span className="step-num">→</span>
-                  <span className="step-label">Submit</span>
-                </button>
+                {!isReadOnly && (
+                  <button className="step-btn step-submit" onClick={() => setShowConfirm(true)}>
+                    <span className="step-num">→</span>
+                    <span className="step-label">Submit</span>
+                  </button>
+                )}
               </div>
-              {user && (
-                <div className="editor-user-label">
-                  {user.name}
+              <div className="editor-user-label">
+                {isReadOnly ? `Viewing: ${viewingUser?.name}` : user?.name}
+                {!isReadOnly && user && (
                   <button
                     style={{ marginLeft: 8, background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: 11 }}
                     onClick={() => { setUser(null); setView('leaderboard'); }}
                   >
                     (switch)
                   </button>
-                </div>
-              )}
+                )}
+              </div>
             </div>
 
             {editorTab === 'groups' && (
-              <GroupStage groupPredictions={groupPredictions} onChange={handleGroupChange} onRandom={randomizeGroups} />
+              <GroupStage 
+                groupPredictions={groupPredictions} 
+                onChange={handleGroupChange} 
+                onRandom={randomizeGroups} 
+                isReadOnly={isReadOnly}
+              />
             )}
             {editorTab === 'third' && (
               <ThirdPlace
@@ -387,6 +428,7 @@ export default function App() {
                 thirdSelections={thirdSelections}
                 onChange={handleThirdChange}
                 onRandom={randomizeThird}
+                isReadOnly={isReadOnly}
               />
             )}
             {editorTab === 'bracket' && (
@@ -396,6 +438,7 @@ export default function App() {
                 knockoutPicks={knockoutPicks}
                 onPick={handleKnockoutPick}
                 onRandom={randomizeBracket}
+                isReadOnly={isReadOnly}
               />
             )}
           </>
@@ -404,7 +447,7 @@ export default function App() {
         {view === 'admin' && <Admin />}
       </main>
 
-      {saveStatus !== 'idle' && view === 'bracket' && (
+      {saveStatus !== 'idle' && view === 'bracket' && !isReadOnly && (
         <div className="save-bar">
           <span className={`save-status${saveStatus === 'saved' ? ' saved' : ''}`}>
             {saveStatus === 'saving' ? 'Saving…' : '✓ Saved'}
@@ -416,7 +459,7 @@ export default function App() {
         <NamePicker onSelect={handlePickerSelect} onClose={() => setShowPicker(false)} />
       )}
 
-      {showConfirm && (() => {
+      {showConfirm && !isReadOnly && (() => {
         const groupsDone = GROUP_NAMES.filter(g => {
           const p = groupPredictions[g];
           return p?.first && p?.second && p?.third && p?.fourth;

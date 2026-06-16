@@ -1,98 +1,65 @@
-import { useEffect, useState } from 'react';
+import { useState, useEffect } from 'react';
 import { getScores } from '../api';
 
-export default function Leaderboard({ currentUser }) {
+export default function Leaderboard({ currentUser, onSelectUser }) {
   const [scores, setScores] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
 
   useEffect(() => {
     getScores()
-      .then(data => setScores(data))
-      .catch(() => setError('Failed to load scores.'))
-      .finally(() => setLoading(false));
+      .then(data => {
+        setScores(data);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
   }, []);
 
-  if (loading) return <div className="empty-state">Loading scores…</div>;
-  if (error) return <div className="empty-state" style={{ color: 'var(--red)' }}>{error}</div>;
-  if (!scores.length) return <div className="empty-state">No participants yet.</div>;
-
-  const COLUMNS = [
-    { key: 'groups',   label: 'Groups',   max: 32  },
-    { key: 'r16',      label: 'R16',      max: 32  },
-    { key: 'qf',       label: 'QF',       max: 32  },
-    { key: 'sf',       label: 'SF',       max: 32  },
-    { key: 'final',    label: 'Final',    max: 32  },
-    { key: 'champion', label: 'Champion', max: 32  },
-  ];
+  if (loading) return <div className="leaderboard-loading">Loading standings...</div>;
 
   return (
-    <div>
-      <div className="section-title">
-        Leaderboard
-        <span className="badge badge-blue">{scores.length} participants</span>
-        <span style={{ fontSize: 12, color: 'var(--text-dim)', fontWeight: 400, marginLeft: 4 }}>
-          Max possible: 192 pts
-        </span>
-      </div>
-
-      <div style={{ overflowX: 'auto' }}>
-        <table className="leaderboard-table">
-          <thead>
+    <div className="leaderboard-card">
+      <table className="leaderboard-table">
+        <thead>
+          <tr>
+            <th className="col-rank">#</th>
+            <th className="col-name">Participant</th>
+            <th className="col-score">Pts</th>
+          </tr>
+        </thead>
+        <tbody>
+          {scores.map((row, i) => {
+            const isMe = currentUser && row.user_id === currentUser.id;
+            return (
+              <tr key={row.user_id} className={isMe ? 'row-me' : ''}>
+                <td className="col-rank">{i + 1}</td>
+                <td className="col-name">
+                  <span 
+                    className="leaderboard-name-link"
+                    onClick={() => onSelectUser({ id: row.user_id, name: row.user_name })}
+                    style={{ 
+                      cursor: 'pointer', 
+                      fontWeight: isMe ? '800' : '500',
+                      textDecoration: 'underline',
+                      textDecorationColor: 'rgba(255,255,255,0.2)'
+                    }}
+                  >
+                    {row.user_name}
+                  </span>
+                  {isMe && <span className="me-badge">YOU</span>}
+                </td>
+                <td className="col-score">{row.total_points || 0}</td>
+              </tr>
+            );
+          })}
+          {scores.length === 0 && (
             <tr>
-              <th style={{ width: 40 }}>Rank</th>
-              <th>Name</th>
-              <th style={{ textAlign: 'center', color: 'var(--gold)' }}>Total</th>
-              {COLUMNS.map(c => (
-                <th key={c.key} style={{ textAlign: 'center' }}>
-                  {c.label}
-                  <div style={{ fontSize: 10, fontWeight: 400, color: 'var(--text-dim)' }}>/{c.max}</div>
-                </th>
-              ))}
+              <td colSpan="3" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-dim)' }}>
+                No predictions submitted yet. Be the first!
+              </td>
             </tr>
-          </thead>
-          <tbody>
-            {scores.map((row, idx) => {
-              const isMe = row.user_id === currentUser?.id;
-              return (
-                <tr key={row.user_id} style={isMe ? { background: 'rgba(245,196,0,.06)' } : {}}>
-                  <td style={{ textAlign: 'center', color: idx === 0 ? 'var(--gold)' : 'var(--text-dim)', fontWeight: idx < 3 ? 700 : 400 }}>
-                    {idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : idx + 1}
-                  </td>
-                  <td>
-                    <strong>{row.user_name}</strong>
-                    {isMe && (
-                      <span className="badge" style={{ marginLeft: 8, fontSize: 10 }}>You</span>
-                    )}
-                  </td>
-                  <td style={{ textAlign: 'center', fontWeight: 700, color: 'var(--gold)', fontSize: 15 }}>
-                    {row.total}
-                  </td>
-                  {COLUMNS.map(c => {
-                    const val = row.breakdown[c.key];
-                    return (
-                      <td key={c.key} style={{ textAlign: 'center' }}>
-                        {val === null || val === undefined ? (
-                          <span style={{ color: 'var(--text-dim)' }}>—</span>
-                        ) : (
-                          <span style={{ color: val === c.max ? 'var(--gold)' : val > 0 ? 'var(--text)' : 'var(--text-dim)' }}>
-                            {val}
-                          </span>
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 12 }}>
-        Scores update as the tournament progresses. "—" means that stage hasn't been scored yet.
-        Points: Groups 1pt/team · R16 2pts · QF 4pts · SF 8pts · Final 16pts · Champion 32pts.
-      </p>
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }

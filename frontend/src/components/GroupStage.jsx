@@ -16,8 +16,10 @@ function getTeamRank(pred, teamName) {
   return RANK_KEYS.findIndex(k => pred[k] === teamName) + 1 || 0;
 }
 
-function GroupCard({ groupKey, teams, prediction, onChange }) {
+function GroupCard({ groupKey, teams, prediction, onChange, isReadOnly }) {
   const handleRank = (teamName, rank) => {
+    if (isReadOnly) return; // Guard to completely stop interaction in read-only mode
+    
     const currentRank = getTeamRank(prediction, teamName);
     const key = RANK_KEYS[rank - 1];
     let next = { ...prediction };
@@ -66,7 +68,8 @@ function GroupCard({ groupKey, teams, prediction, onChange }) {
                   key={r}
                   className={`rank-btn${rank === r ? ` rank-${r}` : ''}`}
                   onClick={() => handleRank(team.name, r)}
-                  title={`Set ${RANK_LABELS[r - 1]}`}
+                  disabled={isReadOnly} // Disables interactivity completely
+                  title={isReadOnly ? "Viewing prediction only" : `Set ${RANK_LABELS[r - 1]}`}
                 >
                   {r}
                 </button>
@@ -103,7 +106,7 @@ function GroupCard({ groupKey, teams, prediction, onChange }) {
   );
 }
 
-export default function GroupStage({ groupPredictions, onChange, onRandom }) {
+export default function GroupStage({ groupPredictions, onChange, onRandom, isReadOnly }) {
   const filled = GROUP_NAMES.filter(g => RANK_KEYS.every(k => groupPredictions[g]?.[k])).length;
 
   return (
@@ -111,13 +114,19 @@ export default function GroupStage({ groupPredictions, onChange, onRandom }) {
       <div className="section-title">
         Group Stage
         <span className="badge badge-blue">{filled}/{GROUP_NAMES.length} groups complete</span>
-        <button className="btn-random" onClick={onRandom} title="Fill all groups randomly">Random</button>
+        {/* Only render random button if not in read-only inspection mode */}
+        {!isReadOnly && (
+          <button className="btn-random" onClick={onRandom} title="Fill all groups randomly">Random</button>
+        )}
       </div>
       <div className="progress-bar">
         <div className="progress-fill" style={{ width: `${(filled / GROUP_NAMES.length) * 100}%` }} />
       </div>
       <p style={{ color: 'var(--text-dim)', marginBottom: 20, fontSize: 13 }}>
-        Rank all 4 teams in each group (1st to 4th). Top 2 qualify automatically; best 8 third-place teams advance as wildcards.
+        {isReadOnly 
+          ? "Viewing participant's predictions for group stage rankings. Inputs are locked."
+          : "Rank all 4 teams in each group (1st to 4th). Top 2 qualify automatically; best 8 third-place teams advance as wildcards."
+        }
       </p>
       <div className="groups-grid">
         {GROUP_NAMES.map(g => (
@@ -127,6 +136,7 @@ export default function GroupStage({ groupPredictions, onChange, onRandom }) {
             teams={GROUPS[g].teams}
             prediction={groupPredictions[g] || { first: null, second: null, third: null, fourth: null }}
             onChange={onChange}
+            isReadOnly={isReadOnly}
           />
         ))}
       </div>

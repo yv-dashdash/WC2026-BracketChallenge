@@ -1,6 +1,6 @@
 import { GROUP_NAMES, GROUPS } from '../data/teams';
 
-export default function ThirdPlace({ groupPredictions, thirdSelections, onChange, onRandom }) {
+export default function ThirdPlace({ groupPredictions, thirdSelections, onChange, onRandom, isReadOnly }) {
   const thirdTeams = GROUP_NAMES.map(g => {
     const pred = groupPredictions[g];
     const name = pred?.third || null;
@@ -10,6 +10,8 @@ export default function ThirdPlace({ groupPredictions, thirdSelections, onChange
   }).filter(Boolean);
 
   const toggle = (teamName) => {
+    if (isReadOnly) return; // Guard to block data modifications when in read-only view
+    
     if (thirdSelections.includes(teamName)) {
       onChange(thirdSelections.filter(t => t !== teamName));
     } else if (thirdSelections.length < 8) {
@@ -24,7 +26,10 @@ export default function ThirdPlace({ groupPredictions, thirdSelections, onChange
       <div className="section-title">
         Best 3rd Place Teams
         <span className="badge badge-blue">{thirdSelections.length}/8 selected</span>
-        <button className="btn-random" onClick={onRandom} title="Pick 8 random third-place teams">Random</button>
+        {/* Hide random fill button when viewing an inspected leaderboard user */}
+        {!isReadOnly && (
+          <button className="btn-random" onClick={onRandom} title="Pick 8 random third-place teams">Random</button>
+        )}
       </div>
 
       {groupsWithThird < 12 && (
@@ -34,20 +39,32 @@ export default function ThirdPlace({ groupPredictions, thirdSelections, onChange
       )}
 
       <div className="third-place-section">
-        <p>
-          8 of the 12 third-place teams advance to the Round of 32. Pick which ones you think will qualify.
-          {thirdSelections.length === 8 && <strong style={{ color: 'var(--green)' }}> All 8 slots filled!</strong>}
+        <p style={{ color: 'var(--text-dim)', fontSize: 13, marginBottom: 12 }}>
+          {isReadOnly 
+            ? "Viewing participant's best 3rd place selections (Read-Only)" 
+            : "8 of the 12 third-place teams advance to the Round of 32. Pick which ones you think will qualify."
+          }
+          {!isReadOnly && thirdSelections.length === 8 && <strong style={{ color: 'var(--green)' }}> All 8 slots filled!</strong>}
         </p>
         <div className="third-team-grid">
           {thirdTeams.map(team => {
             const selected = thirdSelections.includes(team.name);
-            const disabled = !selected && thirdSelections.length >= 8;
+            const disabled = (!selected && thirdSelections.length >= 8) || isReadOnly;
+            
+            // Generate visual style adjustments based on status
+            let chipStyle = {};
+            if (isReadOnly) {
+              chipStyle = { cursor: 'default' };
+            } else if (disabled) {
+              chipStyle = { opacity: .4, cursor: 'not-allowed' };
+            }
+
             return (
               <div
                 key={team.group}
-                className={`third-team-chip${selected ? ' selected' : ''}`}
+                className={`third-team-chip${selected ? ' selected' : ''}${isReadOnly ? ' read-only' : ''}`}
                 onClick={() => !disabled && toggle(team.name)}
-                style={disabled ? { opacity: .4, cursor: 'not-allowed' } : {}}
+                style={chipStyle}
               >
                 <span style={{ fontSize: 16 }}>{team.flag}</span>
                 <span>{team.name}</span>

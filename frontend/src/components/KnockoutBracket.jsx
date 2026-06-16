@@ -74,8 +74,10 @@ function BracketRound({ title, matches, teams, picks, onPick, roundIndex, classN
   );
 }
 
-export default function KnockoutBracket({ groupPredictions, thirdSelections, knockoutPicks, onPick, onRandom, readOnly }) {
+// Full code below updated to accept isReadOnly from App.jsx and pass as readOnly internally
+export default function KnockoutBracket({ groupPredictions, thirdSelections, knockoutPicks, onPick, onRandom, isReadOnly }) {
   const resolve = (seed) => resolveSeed(seed, groupPredictions, thirdSelections);
+  const readOnly = isReadOnly; // Map prop to internal variable name
 
   const r32Teams = R32_MATCHES.reduce((acc, m) => {
     acc[m.id] = { teamA: resolve(m.team1Seed), teamB: resolve(m.team2Seed) };
@@ -126,7 +128,11 @@ export default function KnockoutBracket({ groupPredictions, thirdSelections, kno
           </div>
         </>
       )}
-      {readOnly && <div style={{ height: 12 }} />}
+      {readOnly && (
+        <p style={{ color: 'var(--text-dim)', fontSize: 13, textAlign: 'center', margin: '12px 0 20px' }}>
+          Viewing participant's elimination bracket (Read-Only)
+        </p>
+      )}
 
       <div className="bracket-wrap">
         <div className="bracket" style={{ alignItems: 'flex-start' }}>
