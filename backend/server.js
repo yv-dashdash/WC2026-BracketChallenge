@@ -58,6 +58,7 @@ const initDb = async () => {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    console.log("Database tables verified successfully in Supabase.");
   } catch (err) {
     console.error("Error initializing Supabase tables:", err.message);
   } finally {
@@ -146,13 +147,11 @@ function checkAdmin(req, res) {
 app.post('/api/admin/results', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   const { stage, teams } = req.body;
-  
-  // FIX: Allow both official and live keys
+  // MODIFIED: Added live_ prefixes to allowed stages
   const valid = [
     'r32','r16','qf','sf','final','champion',
     'live_r32','live_r16','live_qf','live_sf','live_final','live_champion'
   ];
-  
   if (!stage || !valid.includes(stage) || teams === undefined) return res.status(400).json({ error: 'Invalid' });
   try {
     await pool.query(`
@@ -190,43 +189,47 @@ app.get('/api/scores', async (_req, res) => {
       actual[r.stage] = new Set(Array.isArray(parsedTeams) ? parsedTeams : [parsedTeams]);
     }
 
+    // MODIFIED: Helper to check official first, then live_ prefix as fallback
+    const getActual = (key) => actual[key] || actual['live_' + key] || null;
+
     const scores = users.map(user => {
       const up = allPreds.filter(p => p.user_id === user.id);
 
-      // FIX: Only calculate scores if the exact stage exists
-      const calcScore = (stageKey, matchIds, pts, isChampion = false) => {
-        if (!actual[stageKey]) return 0; // Return 0 if no results entered
-        
-        if (isChampion) {
-          const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
-          return (cp?.data && actual[stageKey].has(cp.data)) ? 32 : 0;
+      const r32Set = getActual('r32');
+      let groups = r32Set ? 0 : null;
+      if (r32Set) {
+        for (const gp of up.filter(p => p.stage === 'groups')) {
+          if (gp.data.first && r32Set.has(gp.data.first)) groups++;
+          if (gp.data.second && r32Set.has(gp.data.second)) groups++;
         }
+        const tp = up.find(p => p.stage === 'third' && p.match_id === 'selections');
+        if (tp && Array.isArray(tp.data)) for (const t of tp.data) if (t && r32Set.has(t)) groups++;
+      }
 
+      const knockoutScore = (stageKey, matchIds, pts) => {
+        const set = getActual(stageKey);
+        if (!set) return null;
         let s = 0;
         for (const id of matchIds) {
           const pick = up.find(p => p.stage === 'knockout' && p.match_id === id);
-          if (pick?.data && actual[stageKey].has(pick.data)) s += pts;
+          if (pick?.data && set.has(pick.data)) s += pts;
         }
         return s;
       };
 
-      let groups = actual['r32'] ? 0 : 0;
-      if (actual['r32']) {
-        for (const gp of up.filter(p => p.stage === 'groups')) {
-          if (gp.data.first && actual['r32'].has(gp.data.first)) groups++;
-          if (gp.data.second && actual['r32'].has(gp.data.second)) groups++;
-        }
-        const tp = up.find(p => p.stage === 'third' && p.match_id === 'selections');
-        if (tp && Array.isArray(tp.data)) for (const t of tp.data) if (t && actual['r32'].has(t)) groups++;
+      const r16 = knockoutScore('r16', R32_MATCH_IDS, 2);
+      const qf = knockoutScore('qf', R16_MATCH_IDS, 4);
+      const sf = knockoutScore('sf', QF_MATCH_IDS, 8);
+      const final = knockoutScore('final', SF_MATCH_IDS, 16);
+      
+      const championSet = getActual('champion');
+      let champion = championSet ? 0 : null;
+      if (championSet) {
+        const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
+        if (cp?.data && championSet.has(cp.data)) champion = 32;
       }
 
-      const r16 = calcScore('r16', R32_MATCH_IDS, 2);
-      const qf = calcScore('qf', R16_MATCH_IDS, 4);
-      const sf = calcScore('sf', QF_MATCH_IDS, 8);
-      const final = calcScore('final', SF_MATCH_IDS, 16);
-      const champion = calcScore('champion', [], 0, true);
-
-      const total = groups + r16 + qf + sf + final + champion;
+      const total = [groups, r16, qf, sf, final, champion].reduce((s, v) => s + (v ?? 0), 0);
       return { user_id: user.id, user_name: user.name, total, breakdown: { groups, r16, qf, sf, final, champion } };
     });
 
