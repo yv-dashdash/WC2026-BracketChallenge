@@ -147,16 +147,11 @@ function checkAdmin(req, res) {
 app.post('/api/admin/results', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   const { stage, teams } = req.body;
-  
   const valid = [
-    'r32', 'r16', 'qf', 'sf', 'final', 'champion',
-    'live_r32', 'live_r16', 'live_qf', 'live_sf', 'live_final', 'live_champion'
+    'r32','r16','qf','sf','final','champion',
+    'live_r32','live_r16','live_qf','live_sf','live_final','live_champion'
   ];
-
-  if (!stage || !valid.includes(stage) || teams === undefined) {
-    return res.status(400).json({ error: 'Invalid stage or missing team data' });
-  }
-
+  if (!stage || !valid.includes(stage) || teams === undefined) return res.status(400).json({ error: 'Invalid' });
   try {
     await pool.query(`
       INSERT INTO actual_results (stage, teams, updated_at)
@@ -164,9 +159,7 @@ app.post('/api/admin/results', async (req, res) => {
       ON CONFLICT(stage) DO UPDATE SET teams = EXCLUDED.teams, updated_at = CURRENT_TIMESTAMP
     `, [stage, JSON.stringify(teams)]);
     res.json({ ok: true });
-  } catch (err) { 
-    res.status(500).json({ error: err.message }); 
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/admin/results', async (req, res) => {
@@ -195,30 +188,32 @@ app.get('/api/scores', async (_req, res) => {
       actual[r.stage] = new Set(Array.isArray(parsedTeams) ? parsedTeams : [parsedTeams]);
     }
 
-    // Helper to get active results mapping (use official if locked, else fallback to live trend)
-    const getActiveSet = (stageKey) => {
-      if (actual[stageKey] && actual[stageKey].size > 0) return actual[stageKey];
-      const liveKey = `live_${stageKey}`;
-      if (actual[liveKey] && actual[liveKey].size > 0) return actual[liveKey];
+    const getTargetSet = (officialKey, useLiveFallback = true) => {
+      if (actual[officialKey] && actual[officialKey].size > 0) return actual[officialKey];
+      if (useLiveFallback) {
+        const liveKey = `live_${officialKey}`;
+        if (actual[liveKey] && actual[liveKey].size > 0) return actual[liveKey];
+      }
       return null;
     };
 
     const scores = users.map(user => {
       const up = allPreds.filter(p => p.user_id === user.id);
 
-      const r32Set = getActiveSet('r32');
-      let groups = r32Set ? 0 : null;
-      if (r32Set) {
+      // 1. Calculate Live / Running Points
+      const liveR32Set = getTargetSet('r32', true);
+      let liveGroups = liveR32Set ? 0 : null;
+      if (liveR32Set) {
         for (const gp of up.filter(p => p.stage === 'groups')) {
-          if (gp.data.first && r32Set.has(gp.data.first)) groups++;
-          if (gp.data.second && r32Set.has(gp.data.second)) groups++;
+          if (gp.data.first && liveR32Set.has(gp.data.first)) liveGroups++;
+          if (gp.data.second && liveR32Set.has(gp.data.second)) liveGroups++;
         }
         const tp = up.find(p => p.stage === 'third' && p.match_id === 'selections');
-        if (tp && Array.isArray(tp.data)) for (const t of tp.data) if (t && r32Set.has(t)) groups++;
+        if (tp && Array.isArray(tp.data)) for (const t of tp.data) if (t && liveR32Set.has(t)) liveGroups++;
       }
 
-      const knockoutScore = (stageKey, matchIds, pts) => {
-        const activeSet = getActiveSet(stageKey);
+      const calcLiveKnockout = (stageKey, matchIds, pts) => {
+        const activeSet = getTargetSet(stageKey, true);
         if (!activeSet) return null;
         let s = 0;
         for (const id of matchIds) {
@@ -228,29 +223,67 @@ app.get('/api/scores', async (_req, res) => {
         return s;
       };
 
-      const r16 = knockoutScore('r16', R32_MATCH_IDS, 2);
-      const qf = knockoutScore('qf', R16_MATCH_IDS, 4);
-      const sf = knockoutScore('sf', QF_MATCH_IDS, 8);
-      const final = knockoutScore('final', SF_MATCH_IDS, 16);
+      const liveR16 = calcLiveKnockout('r16', R32_MATCH_IDS, 2);
+      const liveQf  = calcLiveKnockout('qf', R16_MATCH_IDS, 4);
+      const liveSf  = calcLiveKnockout('sf', QF_MATCH_IDS, 8);
+      const liveFinal = calcLiveKnockout('final', SF_MATCH_IDS, 16);
       
-      const champSet = getActiveSet('champion');
-      let champion = champSet ? 0 : null;
-      if (champSet) {
+      const liveChampSet = getTargetSet('champion', true);
+      let liveChampion = liveChampSet ? 0 : null;
+      if (liveChampSet) {
         const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
-        if (cp?.data && champSet.has(cp.data)) champion = 32;
+        if (cp?.data && liveChampSet.has(cp.data)) liveChampion = 32;
       }
 
-      const total = [groups, r16, qf, sf, final, champion].reduce((s, v) => s + (v ?? 0), 0);
+      const totalLivePoints = [liveGroups, liveR16, liveQf, liveSf, liveFinal, liveChampion].reduce((s, v) => s + (v ?? 0), 0);
+
+      // 2. Calculate Strict Official Points (returns 0 instead of null if empty so UI stays blank/zero)
+      const officialR32Set = getTargetSet('r32', false);
+      let officialGroups = officialR32Set ? 0 : 0; 
+      if (officialR32Set) {
+        for (const gp of up.filter(p => p.stage === 'groups')) {
+          if (gp.data.first && officialR32Set.has(gp.data.first)) officialGroups++;
+          if (gp.data.second && officialR32Set.has(gp.data.second)) officialGroups++;
+        }
+        const tp = up.find(p => p.stage === 'third' && p.match_id === 'selections');
+        if (tp && Array.isArray(tp.data)) for (const t of tp.data) if (t && officialR32Set.has(t)) officialGroups++;
+      }
+
+      const calcOfficialKnockout = (stageKey, matchIds, pts) => {
+        const activeSet = getTargetSet(stageKey, false);
+        if (!activeSet) return 0; // Standardize to 0 points instead of null
+        let s = 0;
+        for (const id of matchIds) {
+          const pick = up.find(p => p.stage === 'knockout' && p.match_id === id); // FIXED: Typo corrected here
+          if (pick?.data && activeSet.has(pick.data)) s += pts;
+        }
+        return s;
+      };
+
+      const officialR16 = calcOfficialKnockout('r16', R32_MATCH_IDS, 2);
+      const officialQf  = calcOfficialKnockout('qf', R16_MATCH_IDS, 4);
+      const officialSf  = calcOfficialKnockout('sf', QF_MATCH_IDS, 8);
+      const officialFinal = calcOfficialKnockout('final', SF_MATCH_IDS, 16);
+      
+      const officialChampSet = getTargetSet('champion', false);
+      let officialChampion = 0;
+      if (officialChampSet) {
+        const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
+        if (cp?.data && officialChampSet.has(cp.data)) officialChampion = 32;
+      }
+
+      const totalOfficialPoints = [officialGroups, officialR16, officialQf, officialSf, officialFinal, officialChampion].reduce((s, v) => s + (v ?? 0), 0);
+
       return { 
         user_id: user.id, 
         user_name: user.name, 
-        total, 
-        total_points: total, // Matches layout requirement field inside Leaderboard.jsx
-        breakdown: { groups, r16, qf, sf, final, champion } 
+        total: totalOfficialPoints, 
+        total_points: totalLivePoints, 
+        breakdown: { groups: officialGroups, r16: officialR16, qf: officialQf, sf: officialSf, final: officialFinal, champion: officialChampion } 
       };
     });
 
-    scores.sort((a, b) => b.total - a.total);
+    scores.sort((a, b) => b.total_points - a.total_points);
     res.json(scores);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
