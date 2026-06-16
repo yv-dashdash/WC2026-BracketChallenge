@@ -18,42 +18,40 @@ export default function Leaderboard({ currentUser, onSelectUser }) {
   useEffect(() => {
     async function loadLeaderboardSystem() {
       try {
-        // Step 1: Immediately fetch the official scores and user listings safely
+        // Step 1: Immediately fetch official scores so names appear instantly
         const baseScores = await getScores();
         
-        // Setup initial display array so names appear instantly
         const initialList = baseScores.map(p => ({
           user_id: p.user_id,
           user_name: p.user_name,
           official_score: p.total_points || 0,
-          live_score: p.total_points || 0 // Default fallback until live matches are processed
+          live_score: p.total_points || 0 
         }));
         
         setParticipants(initialList);
 
-        // Step 2: Fetch actual tournament targets to calculate live variance on the fly
+        // Step 2: Fetch actual tournament records to evaluate live trends
         const actualData = await getActualResults('').catch(() => ({}));
         
-        // Find which stages have active "Live Trend" tracking entries in the DB
+        // Isolate which stages currently have active live choices saved
         const activeLiveStages = STAGE_CONFIGS.filter(stage => {
           const liveTeams = actualData[`live_${stage.key}`]?.teams;
           return Array.isArray(liveTeams) && liveTeams.length > 0;
         });
 
-        // If no custom live trend data has been entered by the admin yet, we are done!
+        // If no dynamic custom data has been registered yet, fallback to stable records
         if (activeLiveStages.length === 0) {
           setLoading(false);
           return;
         }
 
-        // Build quick lookup structures for active live matching values
         const liveTruthMap = {};
         activeLiveStages.forEach(stage => {
           const teams = actualData[`live_${stage.key}`]?.teams;
           liveTruthMap[stage.key] = new Set(teams);
         });
 
-        // Step 3: Sequentially check user arrays to calculate Live variations cleanly
+        // Step 3: Compute live user metrics sequentially
         const updatedList = await Promise.all(
           initialList.map(async (player) => {
             let calculatedLivePoints = 0;
@@ -62,19 +60,21 @@ export default function Leaderboard({ currentUser, onSelectUser }) {
               const predictions = await loadPredictions(player.user_id);
 
               predictions.forEach(row => {
-                // Check live points matching for group selections
+                // Group stage predictions: Extract 1st, 2nd, AND 3rd place slots!
                 if (row.stage === 'groups' && row.data && liveTruthMap['r32']) {
-                  const predictedTeams = Object.values(row.data).filter(Boolean);
-                  predictedTeams.forEach(team => {
+                  const { first, second, third } = row.data;
+                  const userTopThreeTeams = [first, second, third].filter(Boolean);
+
+                  userTopThreeTeams.forEach(team => {
                     if (liveTruthMap['r32'].has(team)) {
-                      calculatedLivePoints += 1; // 1 point per correct r32 team
+                      calculatedLivePoints += 1; // 1 point per correct R32 qualifier
                     }
                   });
                 }
 
-                // Check live points matching for direct knockout stages
+                // Knockout stage bracket matches
                 if (row.stage === 'knockout' && row.data) {
-                  const targetStage = row.match_id; // 'r16', 'qf', etc.
+                  const targetStage = row.match_id; 
                   const chosenTeam = row.data;
                   if (chosenTeam && liveTruthMap[targetStage] && liveTruthMap[targetStage].has(chosenTeam)) {
                     const stageWeight = STAGE_CONFIGS.find(s => s.key === targetStage)?.weight || 0;
@@ -84,7 +84,7 @@ export default function Leaderboard({ currentUser, onSelectUser }) {
               });
             } catch (err) {
               console.error(`Could not evaluate live variance for user: ${player.user_name}`, err);
-              return player; // Fallback to safe defaults if connection drops
+              return player; 
             }
 
             return {
@@ -109,7 +109,6 @@ export default function Leaderboard({ currentUser, onSelectUser }) {
     return <div className="leaderboard-loading">Loading standings...</div>;
   }
 
-  // Sort dynamically depending on what tab view toggle is checked
   const sortedParticipants = [...participants].sort((a, b) => {
     if (boardMode === 'live') {
       return b.live_score - a.live_score || b.official_score - a.official_score;
@@ -121,7 +120,7 @@ export default function Leaderboard({ currentUser, onSelectUser }) {
   return (
     <div className="leaderboard-card">
       
-      {/* Tab Controls */}
+      {/* Tab Selectors */}
       <div style={{ 
         display: 'flex', 
         background: 'var(--surface2)', 
