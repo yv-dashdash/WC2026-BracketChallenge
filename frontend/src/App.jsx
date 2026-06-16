@@ -480,7 +480,7 @@ export default function App() {
               {isComplete ? (
                 <div className="modal-subtitle" style={{ marginBottom: 28 }}>
                   Your predictions will be saved and you'll be logged out.
-                  To make changes afterwards, contact Nicolas.
+                  To make changes afterwards, contact Cristian.
                 </div>
               ) : (
                 <div style={{ marginBottom: 28, textAlign: 'left' }}>
