@@ -148,7 +148,6 @@ app.post('/api/admin/results', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   const { stage, teams } = req.body;
   
-  // Accept both strict official strings and live trending prefixes
   const valid = [
     'r32', 'r16', 'qf', 'sf', 'final', 'champion',
     'live_r32', 'live_r16', 'live_qf', 'live_sf', 'live_final', 'live_champion'
@@ -196,25 +195,35 @@ app.get('/api/scores', async (_req, res) => {
       actual[r.stage] = new Set(Array.isArray(parsedTeams) ? parsedTeams : [parsedTeams]);
     }
 
+    // Helper to get active results mapping (use official if locked, else fallback to live trend)
+    const getActiveSet = (stageKey) => {
+      if (actual[stageKey] && actual[stageKey].size > 0) return actual[stageKey];
+      const liveKey = `live_${stageKey}`;
+      if (actual[liveKey] && actual[liveKey].size > 0) return actual[liveKey];
+      return null;
+    };
+
     const scores = users.map(user => {
       const up = allPreds.filter(p => p.user_id === user.id);
 
-      let groups = actual['r32'] ? 0 : null;
-      if (actual['r32']) {
+      const r32Set = getActiveSet('r32');
+      let groups = r32Set ? 0 : null;
+      if (r32Set) {
         for (const gp of up.filter(p => p.stage === 'groups')) {
-          if (gp.data.first && actual['r32'].has(gp.data.first)) groups++;
-          if (gp.data.second && actual['r32'].has(gp.data.second)) groups++;
+          if (gp.data.first && r32Set.has(gp.data.first)) groups++;
+          if (gp.data.second && r32Set.has(gp.data.second)) groups++;
         }
         const tp = up.find(p => p.stage === 'third' && p.match_id === 'selections');
-        if (tp && Array.isArray(tp.data)) for (const t of tp.data) if (t && actual['r32'].has(t)) groups++;
+        if (tp && Array.isArray(tp.data)) for (const t of tp.data) if (t && r32Set.has(t)) groups++;
       }
 
       const knockoutScore = (stageKey, matchIds, pts) => {
-        if (!actual[stageKey]) return null;
+        const activeSet = getActiveSet(stageKey);
+        if (!activeSet) return null;
         let s = 0;
         for (const id of matchIds) {
           const pick = up.find(p => p.stage === 'knockout' && p.match_id === id);
-          if (pick?.data && actual[stageKey].has(pick.data)) s += pts;
+          if (pick?.data && activeSet.has(pick.data)) s += pts;
         }
         return s;
       };
@@ -224,14 +233,21 @@ app.get('/api/scores', async (_req, res) => {
       const sf = knockoutScore('sf', QF_MATCH_IDS, 8);
       const final = knockoutScore('final', SF_MATCH_IDS, 16);
       
-      let champion = actual['champion'] ? 0 : null;
-      if (actual['champion']) {
+      const champSet = getActiveSet('champion');
+      let champion = champSet ? 0 : null;
+      if (champSet) {
         const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
-        if (cp?.data && actual['champion'].has(cp.data)) champion = 32;
+        if (cp?.data && champSet.has(cp.data)) champion = 32;
       }
 
       const total = [groups, r16, qf, sf, final, champion].reduce((s, v) => s + (v ?? 0), 0);
-      return { user_id: user.id, user_name: user.name, total, breakdown: { groups, r16, qf, sf, final, champion } };
+      return { 
+        user_id: user.id, 
+        user_name: user.name, 
+        total, 
+        total_points: total, // Matches layout requirement field inside Leaderboard.jsx
+        breakdown: { groups, r16, qf, sf, final, champion } 
+      };
     });
 
     scores.sort((a, b) => b.total - a.total);
