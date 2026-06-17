@@ -1,134 +1,71 @@
-import { useState, useEffect } from 'react';
-import { getScores } from '../api';
+import React, { useState, useEffect } from 'react';
 
-export default function Leaderboard({ currentUser, onSelectUser }) {
+export default function Leaderboard() {
+  // 'official' or 'live' depending on which tab is clicked
+  const [mode, setMode] = useState('live'); 
   const [scores, setScores] = useState([]);
   const [loading, setLoading] = useState(true);
-  // Toggle between 'live' (fallback enabled) and 'official' (strict data only)
-  const [viewMode, setViewMode] = useState('live'); 
 
   useEffect(() => {
-    getScores()
-      .then(data => {
+    async function fetchScores() {
+      setLoading(true);
+      try {
+        // Enforce the explicit ?mode= query parameter matching the active tab
+        const response = await fetch(`https://wc-2026-bracket-challenge.vercel.app/api/scores?mode=${mode}`);
+        const data = await response.json();
         setScores(data);
+      } catch (err) {
+        console.error("Error fetching leaderboard:", err);
+      } finally {
         setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
+      }
+    }
+    fetchScores();
+  }, [mode]); // Re-fetches automatically whenever the user clicks a tab!
 
-  if (loading) return <div className="leaderboard-loading">Loading standings...</div>;
-
-  // Filter or sort depending on selection if your backend separates breakdowns,
-  // or use the total_points property synced from the fallback calculation.
   return (
-    <div className="leaderboard-card">
-      {/* View Mode Toggle Header */}
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'space-between', 
-        alignItems: 'center', 
-        marginBottom: '20px',
-        padding: '0 4px'
-      }}>
-        <div style={{ fontSize: '16px', fontWeight: '750', color: 'var(--text)' }}>
-          Tournament Standings
-        </div>
-        <div style={{ 
-          display: 'flex', 
-          background: 'var(--surface2)', 
-          padding: '4px', 
-          borderRadius: '8px',
-          border: '1px solid var(--border)'
-        }}>
-          <button 
-            onClick={() => setViewMode('live')}
-            style={{
-              padding: '6px 12px',
-              fontSize: '12px',
-              fontWeight: '600',
-              borderRadius: '6px',
-              border: 'none',
-              cursor: 'pointer',
-              background: viewMode === 'live' ? 'var(--blue)' : 'transparent',
-              color: viewMode === 'live' ? '#fff' : 'var(--text-dim)',
-              transition: 'all 0.2s ease'
-            }}
-          >
-            ⚡ Live Trend
-          </button>
-          <button 
-            onClick={() => setViewMode('official')}
-            style={{
-              padding: '6px 12px',
-              fontSize: '12px',
-              fontWeight: '600',
-              borderRadius: '6px',
-              border: 'none',
-              cursor: 'pointer',
-              background: viewMode === 'official' ? 'var(--gold)' : 'transparent',
-              color: viewMode === 'official' ? '#000' : 'var(--text-dim)',
-              transition: 'all 0.2s ease'
-            }}
-          >
-            🏆 Official
-          </button>
-        </div>
+    <div className="p-6">
+      {/* Tab Switcher */}
+      <div className="flex gap-4 mb-6">
+        <button 
+          onClick={() => setMode('live')} 
+          className={`px-4 py-2 rounded ${mode === 'live' ? 'bg-blue-600 text-white font-bold' : 'bg-gray-200'}`}
+        >
+          Live Trend Leaderboard
+        </button>
+        <button 
+          onClick={() => setMode('official')} 
+          className={`px-4 py-2 rounded ${mode === 'official' ? 'bg-blue-600 text-white font-bold' : 'bg-gray-200'}`}
+        >
+          Official Leaderboard
+        </button>
       </div>
 
-      {/* Leaderboard Table View */}
-      <table className="leaderboard-table">
-        <thead>
-          <tr>
-            <th className="col-rank">#</th>
-            <th className="col-name">Participant</th>
-            <th className="col-score">Pts</th>
-          </tr>
-        </thead>
-        <tbody>
-          {scores.map((row, i) => {
-            const isMe = currentUser && row.user_id === currentUser.id;
-            
-            // If viewing strict official mode, show base total or fall back to 0 if none locked
-            const pointsToDisplay = viewMode === 'official' 
-              ? (row.breakdown?.groups !== null ? row.total : 0)
-              : (row.total_points || 0);
-
-            return (
-              <tr key={row.user_id} className={isMe ? 'row-me' : ''}>
-                <td className="col-rank">{i + 1}</td>
-                <td className="col-name">
-                  <span 
-                    className="leaderboard-name-link"
-                    onClick={() => onSelectUser({ id: row.user_id, name: row.user_name })}
-                    style={{ 
-                      cursor: 'pointer', 
-                      fontWeight: isMe ? '800' : '500',
-                      textDecoration: 'underline',
-                      textDecorationColor: 'rgba(255,255,255,0.2)'
-                    }}
-                  >
-                    {row.user_name}
-                  </span>
-                  {isMe && <span className="me-badge">YOU</span>}
-                </td>
-                <td className="col-score" style={{ 
-                  color: viewMode === 'live' ? 'var(--blue-light)' : 'var(--gold)',
-                  fontWeight: '700'
-                }}>
-                  {pointsToDisplay}
+      {loading ? (
+        <div>Loading scores...</div>
+      ) : (
+        <table className="w-full text-left border-collapse">
+          <thead>
+            <tr className="border-b">
+              <th className="py-2">Rank</th>
+              <th className="py-2">Name</th>
+              <th className="py-2">Points</th>
+            </tr>
+          </thead>
+          <tbody>
+            {scores.map((user, index) => (
+              <tr key={user.user_id} className="border-b">
+                <td className="py-2">{index + 1}</td>
+                <td className="py-2 font-medium">{user.user_name}</td>
+                {/* Unified fallback so it reads whatever property name your UI keys off of */}
+                <td className="py-2 font-bold text-green-600">
+                  {user.total ?? user.score ?? 0} points
                 </td>
               </tr>
-            );
-          })}
-          {scores.length === 0 && (
-            <tr>
-              <td colSpan="3" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-dim)' }}>
-                No predictions submitted yet. Be the first!
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
