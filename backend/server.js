@@ -58,8 +58,9 @@ const initDb = async () => {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    console.log("Database tables verified successfully in Supabase.");
   } catch (err) {
-    console.error('Error initializing database:', err);
+    console.error("Error initializing Supabase tables:", err.message);
   } finally {
     client.release();
   }
@@ -68,84 +69,25 @@ initDb();
 
 const ADMIN_PASSWORD = 'SoftIsBeautiful2026';
 
-function checkAdmin(req, res) {
-  const pw = req.body?.password || req.query?.password;
-  if (pw !== ADMIN_PASSWORD) { res.status(401).json({ error: 'Unauthorized' }); return false; }
-  return true;
-}
-
-// ── Scoring Match Identification Groups ──────────────────────────────────────
+// ── Scoring constants ────────────────────────────────────────────────────────
 const R32_MATCH_IDS = [
   'r32_m74','r32_m77','r32_m73','r32_m75',
   'r32_m83','r32_m84','r32_m81','r32_m82',
   'r32_m76','r32_m78','r32_m79','r32_m80',
-  'r32_m86','r38_m88','r32_m85','r32_m87',
+  'r32_m86','r32_m88','r32_m85','r32_m87',
 ];
 const R16_MATCH_IDS = ['r16_m89','r16_m90','r16_m93','r16_m94','r16_m91','r16_m92','r16_m95','r16_m96'];
 const QF_MATCH_IDS  = ['qf_01','qf_02','qf_03','qf_04'];
 const SF_MATCH_IDS  = ['sf_01','sf_02'];
 
-// Helper to reliably unwrap double-stringified JSON structures
-function safeParse(val) {
-  if (!val) return null;
-  if (typeof val !== 'string') return val;
-  try {
-    const p = JSON.parse(val);
-    return typeof p === 'string' ? safeParse(p) : p;
-  } catch (e) {
-    return val;
-  }
-}
-
-// Structured Team Extractor: Discards historical nested stringified junk items
-function extractCleanTeams(mixedData) {
-  const parsed = safeParse(mixedData);
-  if (!parsed) return [];
-  
-  let candidates = [];
-  if (Array.isArray(parsed)) {
-    candidates = parsed;
-  } else if (typeof parsed === 'object') {
-    candidates = Object.values(parsed);
-  } else if (typeof parsed === 'string') {
-    candidates = [parsed];
-  }
-
-  const output = [];
-  for (const item of candidates) {
-    if (!item) continue;
-    
-    // If an item is an array or object, recurse into it
-    if (typeof item === 'object') {
-      extractCleanTeams(item).forEach(t => output.push(t));
-      continue;
-    }
-
-    const str = String(item).trim();
-    
-    // CRITICAL FILTER: If this item contains array/object hallmarks, it is historical backup junk.
-    // Clean team names will never contain brackets, backslashes, or double quotes inside them.
-    if (str.includes('[') || str.includes(']') || str.includes('\\') || str.includes('"') || str.length > 30) {
-      continue; 
-    }
-
-    if (str.length > 1) {
-      output.push(str.toLowerCase());
-    }
-  }
-
-  // Deduplicate items cleanly
-  return [...new Set(output)];
-}
-
-// ── User Endpoints ───────────────────────────────────────────────────────────
+// ── Users ────────────────────────────────────────────────────────────────────
 app.post('/api/users', async (req, res) => {
   const name = req.body?.name?.trim();
   if (!name) return res.status(400).json({ error: 'Name required' });
   try {
     const existing = await pool.query('SELECT * FROM users WHERE name = $1', [name]);
     if (existing.rows.length > 0) return res.json(existing.rows[0]);
-
+    
     const result = await pool.query('INSERT INTO users (name) VALUES ($1) RETURNING *', [name]);
     res.json(result.rows[0]);
   } catch (err) {
@@ -153,25 +95,27 @@ app.post('/api/users', async (req, res) => {
   }
 });
 
-app.get('/api/users', async (req, res) => {
+app.get('/api/users', async (_req, res) => {
   try {
     const result = await pool.query('SELECT id, name, created_at FROM users ORDER BY name');
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Prediction Endpoints ──────────────────────────────────────────────────────
+// ── Predictions ──────────────────────────────────────────────────────────────
 app.post('/api/predictions/bulk', async (req, res) => {
   const { user_id, predictions } = req.body;
   if (!user_id || !Array.isArray(predictions)) return res.status(400).json({ error: 'Missing fields' });
-
+  
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const upsertQuery = `
       INSERT INTO predictions (user_id, stage, match_id, data, updated_at)
       VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-      ON CONFLICT(user_id, stage, match_id) DO UPDATE SET data = EXCLUDED.data, updated_at = CURRENT_TIMESTAMP
+      ON CONFLICT(user_id, stage, match_id) DO UPDATE SET
+        data = EXCLUDED.data,
+        updated_at = CURRENT_TIMESTAMP
     `;
     for (const p of predictions) {
       await client.query(upsertQuery, [user_id, p.stage, p.match_id, JSON.stringify(p.data)]);
@@ -189,33 +133,41 @@ app.post('/api/predictions/bulk', async (req, res) => {
 app.get('/api/predictions/:userId', async (req, res) => {
   try {
     const result = await pool.query('SELECT stage, match_id, data FROM predictions WHERE user_id = $1', [req.params.userId]);
-    res.json(result.rows.map(r => ({ stage: r.stage, match_id: r.match_id, data: safeParse(r.data) })));
+    res.json(result.rows.map(r => ({ stage: r.stage, match_id: r.match_id, data: JSON.parse(r.data) })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Admin Configuration Endpoints ───────────────────────────────────────────
+// ── Admin ────────────────────────────────────────────────────────────────────
+function checkAdmin(req, res) {
+  const pw = req.body?.password || req.query?.password;
+  if (pw !== ADMIN_PASSWORD) { res.status(401).json({ error: 'Unauthorized' }); return false; }
+  return true;
+}
+
 app.post('/api/admin/results', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   const { stage, teams } = req.body;
-
+  
+  // Accept both strict official strings and live trending prefixes
   const valid = [
-    'groups', 'live_groups',
     'r32', 'r16', 'qf', 'sf', 'final', 'champion',
     'live_r32', 'live_r16', 'live_qf', 'live_sf', 'live_final', 'live_champion'
   ];
-  if (!stage || !valid.includes(stage) || teams === undefined) return res.status(400).json({ error: 'Invalid' });
 
-  // Filter out any historical garbage right as it hits the server
-  const cleanCurrentSelection = extractCleanTeams(teams);
+  if (!stage || !valid.includes(stage) || teams === undefined) {
+    return res.status(400).json({ error: 'Invalid stage or missing team data' });
+  }
 
   try {
     await pool.query(`
       INSERT INTO actual_results (stage, teams, updated_at)
       VALUES ($1, $2, CURRENT_TIMESTAMP)
       ON CONFLICT(stage) DO UPDATE SET teams = EXCLUDED.teams, updated_at = CURRENT_TIMESTAMP
-    `, [stage, JSON.stringify(cleanCurrentSelection)]);
+    `, [stage, JSON.stringify(teams)]);
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 app.get('/api/admin/results', async (req, res) => {
@@ -223,112 +175,71 @@ app.get('/api/admin/results', async (req, res) => {
   try {
     const rows = await pool.query('SELECT stage, teams, updated_at FROM actual_results');
     const result = {};
-    for (const r of rows.rows) {
-      result[r.stage] = { teams: safeParse(r.teams), updated_at: r.updated_at };
-    }
+    for (const r of rows.rows) result[r.stage] = { teams: JSON.parse(r.teams), updated_at: r.updated_at };
     res.json(result);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Leaderboard Core Calculations ───────────────────────────────────────────
-app.get('/api/scores', async (req, res) => {
+// ── Scores ───────────────────────────────────────────────────────────────────
+app.get('/api/scores', async (_req, res) => {
   try {
     const usersRes = await pool.query('SELECT id, name FROM users');
     const predsRes = await pool.query('SELECT user_id, stage, match_id, data FROM predictions');
     const actualRes = await pool.query('SELECT stage, teams FROM actual_results');
 
     const users = usersRes.rows;
-    const allPreds = predsRes.rows;
-
-    const rawActual = {};
+    const allPreds = predsRes.rows.map(r => ({ ...r, data: JSON.parse(r.data) }));
+    
+    const actual = {};
     for (const r of actualRes.rows) {
-      rawActual[r.stage] = r.teams;
+      const parsedTeams = JSON.parse(r.teams);
+      actual[r.stage] = new Set(Array.isArray(parsedTeams) ? parsedTeams : [parsedTeams]);
     }
 
     const scores = users.map(user => {
       const up = allPreds.filter(p => p.user_id === user.id);
 
-      const calculateScoreForTrack = (isLive) => {
-        const targetGroupKey = isLive ? 'live_groups' : 'groups';
-        const targetR32Key = isLive ? 'live_r32' : 'r32';
-        const targetR16Key = isLive ? 'live_r16' : 'r16';
-        const targetQfKey = isLive ? 'live_qf' : 'qf';
-        const targetSfKey = isLive ? 'live_sf' : 'sf';
-        const targetChampKey = isLive ? 'live_champion' : 'champion';
-
-        // 1. Group Stage Verification
-        const actualGroupTeams = new Set(extractCleanTeams(rawActual[targetGroupKey]));
-        let groupsScore = 0;
-
+      let groups = actual['r32'] ? 0 : null;
+      if (actual['r32']) {
         for (const gp of up.filter(p => p.stage === 'groups')) {
-          extractCleanTeams(gp.data).forEach(team => {
-            if (actualGroupTeams.has(team)) groupsScore++;
-          });
+          if (gp.data.first && actual['r32'].has(gp.data.first)) groups++;
+          if (gp.data.second && actual['r32'].has(gp.data.second)) groups++;
         }
-
         const tp = up.find(p => p.stage === 'third' && p.match_id === 'selections');
-        if (tp) {
-          extractCleanTeams(tp.data).forEach(team => {
-            if (actualGroupTeams.has(team)) groupsScore++;
-          });
+        if (tp && Array.isArray(tp.data)) for (const t of tp.data) if (t && actual['r32'].has(t)) groups++;
+      }
+
+      const knockoutScore = (stageKey, matchIds, pts) => {
+        if (!actual[stageKey]) return null;
+        let s = 0;
+        for (const id of matchIds) {
+          const pick = up.find(p => p.stage === 'knockout' && p.match_id === id);
+          if (pick?.data && actual[stageKey].has(pick.data)) s += pts;
         }
-
-        // 2. Knockout Match Lookup
-        const matchLookupScore = (stageKey, matchIds, pointsPerMatch) => {
-          const actualStageTeams = new Set(extractCleanTeams(rawActual[stageKey]));
-          if (actualStageTeams.size === 0) return 0;
-
-          let stagePoints = 0;
-          for (const id of matchIds) {
-            const pick = up.find(p => p.stage === 'knockout' && p.match_id === id);
-            if (pick) {
-              const userPickedTeams = extractCleanTeams(pick.data);
-              if (userPickedTeams.some(team => actualStageTeams.has(team))) {
-                stagePoints += pointsPerMatch;
-              }
-            }
-          }
-          return stagePoints;
-        };
-
-        const r16 = matchLookupScore(targetR32Key, R32_MATCH_IDS, 2);
-        const qf = matchLookupScore(targetR16Key, R16_MATCH_IDS, 4);
-        const sf = matchLookupScore(targetQfKey, QF_MATCH_IDS, 8);
-        const final = matchLookupScore(targetSfKey, SF_MATCH_IDS, 16);
-
-        // 3. Champion Verification
-        let championScore = 0;
-        const actualChampions = new Set(extractCleanTeams(rawActual[targetChampKey]));
-        if (actualChampions.size > 0) {
-          const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
-          if (cp) {
-            const userChampTeams = extractCleanTeams(cp.data);
-            if (userChampTeams.some(team => actualChampions.has(team))) {
-              championScore = 32;
-            }
-          }
-        }
-
-        return groupsScore + r16 + qf + sf + final + championScore;
+        return s;
       };
 
-      const liveTotal = calculateScoreForTrack(true);
-      const officialTotal = calculateScoreForTrack(false);
+      const r16 = knockoutScore('r16', R32_MATCH_IDS, 2);
+      const qf = knockoutScore('qf', R16_MATCH_IDS, 4);
+      const sf = knockoutScore('sf', QF_MATCH_IDS, 8);
+      const final = knockoutScore('final', SF_MATCH_IDS, 16);
+      
+      let champion = actual['champion'] ? 0 : null;
+      if (actual['champion']) {
+        const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
+        if (cp?.data && actual['champion'].has(cp.data)) champion = 32;
+      }
 
-      return { 
-        user_id: user.id, 
-        user_name: user.name, 
-        live_total: liveTotal,
-        official_total: officialTotal
-      };
+      const total = [groups, r16, qf, sf, final, champion].reduce((s, v) => s + (v ?? 0), 0);
+      return { user_id: user.id, user_name: user.name, total, breakdown: { groups, r16, qf, sf, final, champion } };
     });
 
-    scores.sort((a, b) => b.live_total - a.live_total);
+    scores.sort((a, b) => b.total - a.total);
     res.json(scores);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Delete endpoints ─────────────────────────────────────────────────────────
+// ── Delete predictions ────────────────────────────────────────────────────────
 app.delete('/api/admin/predictions/:userId', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   try {
@@ -337,6 +248,7 @@ app.delete('/api/admin/predictions/:userId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ── Delete user entirely ─────────────────────────────────────────────────────
 app.delete('/api/admin/users/:userId', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   try {
@@ -346,4 +258,4 @@ app.delete('/api/admin/users/:userId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(PORT, () => console.log(`Server running smoothly on port ${PORT}`));
+app.listen(PORT, () => console.log(`World Cup Cloud API running safely on port ${PORT}`));
