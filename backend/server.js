@@ -173,7 +173,6 @@ app.get('/api/admin/results', async (req, res) => {
 
 // ── Scores ───────────────────────────────────────────────────────────────────
 app.get('/api/scores', async (req, res) => {
-  // Read the toggle string passed dynamically by the frontend
   const mode = req.query.mode || 'live'; 
   
   try {
@@ -184,67 +183,63 @@ app.get('/api/scores', async (req, res) => {
     const users = usersRes.rows;
     const allPreds = predsRes.rows.map(r => ({ ...r, data: JSON.parse(r.data) }));
     
-    const actualOfficial = {};
-    const actualLive = {};
-    
+    const actual = {};
     for (const r of actualRes.rows) {
       const parsedTeams = JSON.parse(r.teams);
-      const teamsSet = new Set(Array.isArray(parsedTeams) ? parsedTeams : [parsedTeams]);
-      
-      // Separate them cleanly into different evaluation environments
-      if (r.stage.startsWith('live_')) {
-        actualLive[r.stage.replace('live_', '')] = teamsSet;
-      } else {
-        actualOfficial[r.stage] = teamsSet;
-      }
+      actual[r.stage] = new Set(Array.isArray(parsedTeams) ? parsedTeams : [parsedTeams]);
     }
-
-    // Assign the tracking map based on what tab parameter came in
-    const activeData = (mode === 'official') ? actualOfficial : actualLive;
 
     const scores = users.map(user => {
       const up = allPreds.filter(p => p.user_id === user.id);
 
-      const r32Set = activeData['r32'];
-      let groups = 0;
-      if (r32Set) {
-        for (const gp of up.filter(p => p.stage === 'groups')) {
-          if (gp.data.first && r32Set.has(gp.data.first)) groups++;
-          if (gp.data.second && r32Set.has(gp.data.second)) groups++;
+      const calculateScoreForKeys = (r32Key, r16Key, qfKey, sfKey, finalKey, champKey) => {
+        const r32Set = actual[r32Key];
+        let groups = 0;
+        if (r32Set) {
+          for (const gp of up.filter(p => p.stage === 'groups')) {
+            if (gp.data.first && r32Set.has(gp.data.first)) groups++;
+            if (gp.data.second && r32Set.has(gp.data.second)) groups++;
+          }
+          const tp = up.find(p => p.stage === 'third' && p.match_id === 'selections');
+          if (tp && Array.isArray(tp.data)) for (const t of tp.data) if (t && r32Set.has(t)) groups++;
         }
-        const tp = up.find(p => p.stage === 'third' && p.match_id === 'selections');
-        if (tp && Array.isArray(tp.data)) for (const t of tp.data) if (t && r32Set.has(t)) groups++;
-      }
 
-      const knockoutScore = (stageKey, matchIds, pts) => {
-        const set = activeData[stageKey];
-        if (!set) return 0;
-        let s = 0;
-        for (const id of matchIds) {
-          const pick = up.find(p => p.stage === 'knockout' && p.match_id === id);
-          if (pick?.data && set.has(pick.data)) s += pts;
+        const knockoutScore = (stageKey, matchIds, pts) => {
+          const set = actual[stageKey];
+          if (!set) return 0;
+          let s = 0;
+          for (const id of matchIds) {
+            const pick = up.find(p => p.stage === 'knockout' && p.match_id === id);
+            if (pick?.data && set.has(pick.data)) s += pts;
+          }
+          return s;
+        };
+
+        const r16 = knockoutScore(r16Key, R32_MATCH_IDS, 2);
+        const qf = knockoutScore(qfKey, R16_MATCH_IDS, 4);
+        const sf = knockoutScore(sfKey, QF_MATCH_IDS, 8);
+        const final = knockoutScore(finalKey, SF_MATCH_IDS, 16);
+        
+        const champSet = actual[champKey];
+        let champion = 0;
+        if (champSet) {
+          const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
+          if (cp?.data && champSet.has(cp.data)) champion = 32;
         }
-        return s;
+
+        return groups + r16 + qf + sf + final + champion;
       };
 
-      const r16 = knockoutScore('r16', R32_MATCH_IDS, 2);
-      const qf = knockoutScore('qf', R16_MATCH_IDS, 4);
-      const sf = knockoutScore('sf', QF_MATCH_IDS, 8);
-      const final = knockoutScore('final', SF_MATCH_IDS, 16);
-      
-      const champSet = activeData['champion'];
-      let champion = 0;
-      if (champSet) {
-        const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
-        if (cp?.data && champSet.has(cp.data)) champion = 32;
-      }
+      // Explicitly separate the targets to line up with the tab toggles perfectly
+      const liveTotal = calculateScoreForKeys('live_r32', 'live_r16', 'live_qf', 'live_sf', 'live_final', 'live_champion');
+      const officialTotal = calculateScoreForKeys('r32', 'r16', 'qf', 'sf', 'final', 'champion');
 
-      const total = groups + r16 + qf + sf + final + champion;
+      const activeTotal = (mode === 'official') ? officialTotal : liveTotal;
+
       return { 
         user_id: user.id, 
         user_name: user.name, 
-        total: total, 
-        score: total
+        total: activeTotal
       };
     });
 
@@ -271,4 +266,4 @@ app.delete('/api/admin/users/:userId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(PORT, () => console.log(`World Cup Cloud API explicitly parameterized on port ${PORT}`));
+app.listen(PORT, () => console.log(`World Cup Cloud API tab-synchronized scoring engine online on port ${PORT}`));
