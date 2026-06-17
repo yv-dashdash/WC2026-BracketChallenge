@@ -15,12 +15,19 @@ const pool = new Pool({
 
 const ADMIN_PASSWORD = 'SoftIsBeautiful2026';
 
-// ── Admin: Save Results ──
+// Helper to check admin password
+function checkAdmin(req) {
+  return req.body?.password === ADMIN_PASSWORD || req.query?.password === ADMIN_PASSWORD;
+}
+
+// 1. FIXED: Allow 'live_' prefixed stages in the validator
 app.post('/api/admin/results', async (req, res) => {
-  const { password, stage, teams } = req.body;
-  if (password !== ADMIN_PASSWORD) return res.status(401).send('Unauthorized');
+  if (!checkAdmin(req)) return res.status(401).send('Unauthorized');
+  const { stage, teams } = req.body;
+  const valid = ['r32', 'r16', 'qf', 'sf', 'final', 'champion', 'live_r32', 'live_r16', 'live_qf', 'live_sf', 'live_final', 'live_champion'];
   
-  // Allowing both official keys (e.g., 'r32') and live keys (e.g., 'live_r32')
+  if (!stage || !valid.includes(stage)) return res.status(400).send('Invalid stage');
+  
   try {
     await pool.query(
       'INSERT INTO actual_results (stage, teams) VALUES ($1, $2) ON CONFLICT(stage) DO UPDATE SET teams = $2', 
@@ -30,50 +37,34 @@ app.post('/api/admin/results', async (req, res) => {
   } catch (err) { res.status(500).send(err.message); }
 });
 
-// ── Scores: Mode-Specific Fetching ──
+// 2. FIXED: Scoring engine uses 'live_' fallback automatically
 app.get('/api/scores', async (req, res) => {
-  // Frontend should call /api/scores?mode=live OR /api/scores?mode=official
-  const mode = req.query.mode || 'live'; 
-  
   try {
     const usersRes = await pool.query('SELECT id, name FROM users');
     const predsRes = await pool.query('SELECT user_id, stage, match_id, data FROM predictions');
     const actualRes = await pool.query('SELECT stage, teams FROM actual_results');
 
-    const users = usersRes.rows;
-    const allPreds = predsRes.rows.map(r => ({ ...r, data: JSON.parse(r.data) }));
-    
-    // Create separate objects for official and live data
-    const actualOfficial = {};
-    const actualLive = {};
-    
-    for (const r of actualRes.rows) {
-      const teams = new Set(JSON.parse(r.teams));
-      if (r.stage.startsWith('live_')) {
-        actualLive[r.stage.replace('live_', '')] = teams;
-      } else {
-        actualOfficial[r.stage] = teams;
-      }
-    }
+    const actual = {};
+    actualRes.rows.forEach(r => actual[r.stage] = new Set(JSON.parse(r.teams)));
 
-    // Select the dataset based on the requested mode
-    const activeData = (mode === 'official') ? actualOfficial : actualLive;
+    // This helper checks official result, if null, checks live_ version
+    const getResult = (s) => actual[s] || actual['live_' + s] || null;
 
-    const scores = users.map(user => {
-      const up = allPreds.filter(p => p.user_id === user.id);
+    const scores = usersRes.rows.map(user => {
+      const up = predsRes.rows.filter(p => p.user_id === user.id).map(p => ({...p, data: JSON.parse(p.data)}));
       
-      const r32Set = activeData['r32'];
-      let groups = 0;
+      const r32Set = getResult('r32');
+      let total = 0;
+      
+      // Calculate based on the results retrieved
       if (r32Set) {
-        for (const gp of up.filter(p => p.stage === 'groups')) {
-          if (gp.data.first && r32Set.has(gp.data.first)) groups++;
-          if (gp.data.second && r32Set.has(gp.data.second)) groups++;
-        }
+        up.forEach(p => {
+          if (p.stage === 'groups' && ((p.data.first && r32Set.has(p.data.first)) || (p.data.second && r32Set.has(p.data.second)))) total++;
+        });
       }
       
-      // Calculate other stages similarly using activeData...
+      // ... (keep rest of your scoring math here, ensuring it uses getResult(stage))
       
-      const total = groups; // Expand this with other stages as needed
       return { user_id: user.id, user_name: user.name, total };
     });
 
@@ -81,4 +72,4 @@ app.get('/api/scores', async (req, res) => {
   } catch (err) { res.status(500).send(err.message); }
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server running`));
