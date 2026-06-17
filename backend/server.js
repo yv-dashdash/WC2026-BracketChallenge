@@ -86,6 +86,18 @@ const R16_MATCH_IDS = ['r16_m89','r16_m90','r16_m93','r16_m94','r16_m91','r16_m9
 const QF_MATCH_IDS  = ['qf_01','qf_02','qf_03','qf_04'];
 const SF_MATCH_IDS  = ['sf_01','sf_02'];
 
+// Helper helper function to robustly parse JSON strings safely
+function safeParse(val) {
+  if (!val) return null;
+  if (typeof val !== 'string') return val;
+  try {
+    const p = JSON.parse(val);
+    return typeof p === 'string' ? safeParse(p) : p;
+  } catch (e) {
+    return val;
+  }
+}
+
 // ── User Endpoints ───────────────────────────────────────────────────────────
 app.post('/api/users', async (req, res) => {
   const name = req.body?.name?.trim();
@@ -137,7 +149,7 @@ app.post('/api/predictions/bulk', async (req, res) => {
 app.get('/api/predictions/:userId', async (req, res) => {
   try {
     const result = await pool.query('SELECT stage, match_id, data FROM predictions WHERE user_id = $1', [req.params.userId]);
-    res.json(result.rows.map(r => ({ stage: r.stage, match_id: r.match_id, data: JSON.parse(r.data) })));
+    res.json(result.rows.map(r => ({ stage: r.stage, match_id: r.match_id, data: safeParse(r.data) })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -154,7 +166,7 @@ app.post('/api/admin/results', async (req, res) => {
   if (!stage || !valid.includes(stage) || teams === undefined) return res.status(400).json({ error: 'Invalid' });
 
   try {
-    await pool.query suicide(`
+    await pool.query(`
       INSERT INTO actual_results (stage, teams, updated_at)
       VALUES ($1, $2, CURRENT_TIMESTAMP)
       ON CONFLICT(stage) DO UPDATE SET teams = EXCLUDED.teams, updated_at = CURRENT_TIMESTAMP
@@ -169,7 +181,7 @@ app.get('/api/admin/results', async (req, res) => {
     const rows = await pool.query('SELECT stage, teams, updated_at FROM actual_results');
     const result = {};
     for (const r of rows.rows) {
-      result[r.stage] = { teams: JSON.parse(r.teams), updated_at: r.updated_at };
+      result[r.stage] = { teams: safeParse(r.teams), updated_at: r.updated_at };
     }
     res.json(result);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -183,11 +195,11 @@ app.get('/api/scores', async (req, res) => {
     const actualRes = await pool.query('SELECT stage, teams FROM actual_results');
 
     const users = usersRes.rows;
-    const allPreds = predsRes.rows.map(r => ({ ...r, data: JSON.parse(r.data) }));
+    const allPreds = predsRes.rows.map(r => ({ ...r, data: safeParse(r.data) }));
 
     const rawActual = {};
     for (const r of actualRes.rows) {
-      rawActual[r.stage] = JSON.parse(r.teams);
+      rawActual[r.stage] = safeParse(r.teams);
     }
 
     const scores = users.map(user => {
@@ -199,30 +211,33 @@ app.get('/api/scores', async (req, res) => {
 
         let groups = 0;
         if (groupData) {
-          // Flatten all group team structures dynamically into a clean Set
           const validGroupTeams = new Set();
           if (Array.isArray(groupData)) {
-            groupData.forEach(t => { if (t) validGroupTeams.add(t); });
+            groupData.forEach(t => { if (t) validGroupTeams.add(String(t).trim()); });
           } else if (typeof groupData === 'object' && groupData !== null) {
             Object.values(groupData).forEach(g => {
               if (typeof g === 'string') {
-                validGroupTeams.add(g);
+                validGroupTeams.add(g.trim());
               } else if (g && typeof g === 'object') {
-                if (g.first) validGroupTeams.add(g.first);
-                if (g.second) validGroupTeams.add(g.second);
-                if (g.third) validGroupTeams.add(g.third);
-                if (g.fourth) validGroupTeams.add(g.fourth);
+                if (g.first) validGroupTeams.add(String(g.first).trim());
+                if (g.second) validGroupTeams.add(String(g.second).trim());
+                if (g.third) validGroupTeams.add(String(g.third).trim());
+                if (g.fourth) validGroupTeams.add(String(g.fourth).trim());
               }
             });
           }
 
           for (const gp of up.filter(p => p.stage === 'groups')) {
-            if (gp.data?.first && validGroupTeams.has(gp.data.first)) groups++;
-            if (gp.data?.second && validGroupTeams.has(gp.data.second)) groups++;
+            const parsedData = safeParse(gp.data);
+            if (parsedData?.first && validGroupTeams.has(String(parsedData.first).trim())) groups++;
+            if (parsedData?.second && validGroupTeams.has(String(parsedData.second).trim())) groups++;
           }
           const tp = up.find(p => p.stage === 'third' && p.match_id === 'selections');
-          if (tp && Array.isArray(tp.data)) {
-            for (const t of tp.data) if (t && validGroupTeams.has(t)) groups++;
+          if (tp) {
+            const parsedThirds = safeParse(tp.data);
+            if (Array.isArray(parsedThirds)) {
+              for (const t of parsedThirds) if (t && validGroupTeams.has(String(t).trim())) groups++;
+            }
           }
         }
 
@@ -233,15 +248,18 @@ app.get('/api/scores', async (req, res) => {
           let s = 0;
           for (const id of matchIds) {
             const pick = up.find(p => p.stage === 'knockout' && p.match_id === id);
-            if (pick?.data) {
-              // Adaptive matching: Checks objects by match ID, arrays, or flat keys flawlessly
+            if (pick && pick.data) {
+              const parsedPick = String(safeParse(pick.data)).trim();
+              
               if (typeof stageData === 'object' && stageData[id] !== undefined) {
-                if (stageData[id] === pick.data) s += pts;
+                if (String(safeParse(stageData[id])).trim() === parsedPick) s += pts;
               } else if (Array.isArray(stageData)) {
-                if (stageData.includes(pick.data)) s += pts;
-              } else if (typeof stageData === 'object') {
-                if (Object.values(stageData).includes(pick.data)) s += pts;
-              } else if (stageData === pick.data) {
+                const standardizedArray = stageData.map(item => String(safeParse(item)).trim());
+                if (standardizedArray.includes(parsedPick)) s += pts;
+              } else if (typeof stageData === 'object' && stageData !== null) {
+                const standardizedValues = Object.values(stageData).map(item => String(safeParse(item)).trim());
+                if (standardizedValues.includes(parsedPick)) s += pts;
+              } else if (String(safeParse(stageData)).trim() === parsedPick) {
                 s += pts;
               }
             }
@@ -258,10 +276,17 @@ app.get('/api/scores', async (req, res) => {
         let champion = 0;
         if (champData) {
           const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
-          if (cp?.data) {
-            if (Array.isArray(champData) && champData.includes(cp.data)) champion = 32;
-            else if (typeof champData === 'object' && Object.values(champData).includes(cp.data)) champion = 32;
-            else if (champData === cp.data) champion = 32;
+          if (cp && cp.data) {
+            const parsedChampPick = String(safeParse(cp.data)).trim();
+            if (Array.isArray(champData)) {
+              const standardized = champData.map(item => String(safeParse(item)).trim());
+              if (standardized.includes(parsedChampPick)) champion = 32;
+            } else if (typeof champData === 'object' && champData !== null) {
+              const standardized = Object.values(champData).map(item => String(safeParse(item)).trim());
+              if (standardized.includes(parsedChampPick)) champion = 32;
+            } else if (String(safeParse(champData)).trim() === parsedChampPick) {
+              champion = 32;
+            }
           }
         }
 
