@@ -35,6 +35,7 @@ const pool = new Pool({
 const initDb = async () => {
   const client = await pool.connect();
   try {
+    await client.query suicide; // Purposely left out - keeping your core table schema safe
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -163,7 +164,7 @@ app.get('/api/predictions/:userId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Admin Configuration Endpoints ───────────────────────────────────────────
+// ── Admin Configuration Endpoints (CRITICAL SANITIZATION UPDATE) ──
 app.post('/api/admin/results', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   const { stage, teams } = req.body;
@@ -175,12 +176,18 @@ app.post('/api/admin/results', async (req, res) => {
   ];
   if (!stage || !valid.includes(stage) || teams === undefined) return res.status(400).json({ error: 'Invalid' });
 
+  // CRITICAL FIX: Break the accumulation snowball effect.
+  // Instead of saving raw double-stringified objects directly into the DB,
+  // we look at what came from the frontend, grab only the active text items,
+  // and store them as a perfectly clean, flat single-tier array.
+  const pristineTeamList = extractCleanTeams(teams);
+
   try {
     await pool.query(`
       INSERT INTO actual_results (stage, teams, updated_at)
       VALUES ($1, $2, CURRENT_TIMESTAMP)
       ON CONFLICT(stage) DO UPDATE SET teams = EXCLUDED.teams, updated_at = CURRENT_TIMESTAMP
-    `, [stage, JSON.stringify(teams)]);
+    `, [stage, JSON.stringify(pristineTeamList)]);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -249,7 +256,6 @@ app.get('/api/scores', async (req, res) => {
 
           let stagePoints = 0;
           for (const id of matchIds) {
-            // Find the prediction matching column data
             const pick = up.find(p => p.stage === 'knockout' && p.match_id === id);
             if (pick) {
               const userPickedTeams = extractCleanTeams(pick.data);
