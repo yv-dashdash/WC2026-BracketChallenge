@@ -75,7 +75,7 @@ function checkAdmin(req, res) {
   return true;
 }
 
-// ── Scoring constants ────────────────────────────────────────────────────────
+// ── Scoring Match Identification Groups ──────────────────────────────────────
 const R32_MATCH_IDS = [
   'r32_m74','r32_m77','r32_m73','r32_m75',
   'r32_m83','r32_m84','r32_m81','r32_m82',
@@ -86,16 +86,22 @@ const R16_MATCH_IDS = ['r16_m89','r16_m90','r16_m93','r16_m94','r16_m91','r16_m9
 const QF_MATCH_IDS  = ['qf_01','qf_02','qf_03','qf_04'];
 const SF_MATCH_IDS  = ['sf_01','sf_02'];
 
-// Helper helper function to robustly parse JSON strings safely
-function safeParse(val) {
-  if (!val) return null;
-  if (typeof val !== 'string') return val;
-  try {
-    const p = JSON.parse(val);
-    return typeof p === 'string' ? safeParse(p) : p;
-  } catch (e) {
-    return val;
-  }
+// Extracts pure lowercase string arrays from any nested JSON formatting anomalies
+function extractCleanTeams(mixedData) {
+  if (!mixedData) return [];
+  const rawString = typeof mixedData === 'string' ? mixedData : JSON.stringify(mixedData);
+  
+  const pattern = /[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s'.-]{1,25}[A-Za-zÀ-ÿ]/g;
+  const found = rawString.match(pattern) || [];
+  
+  const ignoreKeywords = [
+    'stage', 'match', 'match_id', 'data', 'teams', 'true', 'false', 
+    'first', 'second', 'third', 'fourth', 'groups', 'live_groups', 'knockout', 'selections'
+  ];
+  
+  return found
+    .map(name => name.trim().toLowerCase())
+    .filter(name => name.length > 2 && !ignoreKeywords.includes(name));
 }
 
 // ── User Endpoints ───────────────────────────────────────────────────────────
@@ -149,7 +155,11 @@ app.post('/api/predictions/bulk', async (req, res) => {
 app.get('/api/predictions/:userId', async (req, res) => {
   try {
     const result = await pool.query('SELECT stage, match_id, data FROM predictions WHERE user_id = $1', [req.params.userId]);
-    res.json(result.rows.map(r => ({ stage: r.stage, match_id: r.match_id, data: safeParse(r.data) })));
+    res.json(result.rows.map(r => {
+      let parsed = r.data;
+      try { parsed = JSON.parse(r.data); } catch(e){}
+      return { stage: r.stage, match_id: r.match_id, data: parsed };
+    }));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -181,7 +191,9 @@ app.get('/api/admin/results', async (req, res) => {
     const rows = await pool.query('SELECT stage, teams, updated_at FROM actual_results');
     const result = {};
     for (const r of rows.rows) {
-      result[r.stage] = { teams: safeParse(r.teams), updated_at: r.updated_at };
+      let parsed = r.teams;
+      try { parsed = JSON.parse(r.teams); } catch(e){}
+      result[r.stage] = { teams: parsed, updated_at: r.updated_at };
     }
     res.json(result);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -195,106 +207,83 @@ app.get('/api/scores', async (req, res) => {
     const actualRes = await pool.query('SELECT stage, teams FROM actual_results');
 
     const users = usersRes.rows;
-    const allPreds = predsRes.rows.map(r => ({ ...r, data: safeParse(r.data) }));
+    const allPreds = predsRes.rows;
 
     const rawActual = {};
     for (const r of actualRes.rows) {
-      rawActual[r.stage] = safeParse(r.teams);
+      rawActual[r.stage] = r.teams;
     }
 
     const scores = users.map(user => {
       const up = allPreds.filter(p => p.user_id === user.id);
 
-      const calculateScoreForKeys = (r32Key, r16Key, qfKey, sfKey, finalKey, champKey) => {
-        const targetGroupKey = r32Key.startsWith('live_') ? 'live_groups' : 'groups';
-        const groupData = rawActual[targetGroupKey];
+      const calculateScoreForTrack = (isLive) => {
+        const targetGroupKey = isLive ? 'live_groups' : 'groups';
+        const targetR32Key = isLive ? 'live_r32' : 'r32';
+        const targetR16Key = isLive ? 'live_r16' : 'r16';
+        const targetQfKey = isLive ? 'live_qf' : 'qf';
+        const targetSfKey = isLive ? 'live_sf' : 'sf';
+        const targetChampKey = isLive ? 'live_champion' : 'champion';
 
-        let groups = 0;
-        if (groupData) {
-          const validGroupTeams = new Set();
-          if (Array.isArray(groupData)) {
-            groupData.forEach(t => { if (t) validGroupTeams.add(String(t).trim()); });
-          } else if (typeof groupData === 'object' && groupData !== null) {
-            Object.values(groupData).forEach(g => {
-              if (typeof g === 'string') {
-                validGroupTeams.add(g.trim());
-              } else if (g && typeof g === 'object') {
-                if (g.first) validGroupTeams.add(String(g.first).trim());
-                if (g.second) validGroupTeams.add(String(g.second).trim());
-                if (g.third) validGroupTeams.add(String(g.third).trim());
-                if (g.fourth) validGroupTeams.add(String(g.fourth).trim());
-              }
-            });
-          }
+        // 1. Group Stage Parsing
+        const actualGroupTeams = new Set(extractCleanTeams(rawActual[targetGroupKey]));
+        let groupsScore = 0;
 
-          for (const gp of up.filter(p => p.stage === 'groups')) {
-            const parsedData = safeParse(gp.data);
-            if (parsedData?.first && validGroupTeams.has(String(parsedData.first).trim())) groups++;
-            if (parsedData?.second && validGroupTeams.has(String(parsedData.second).trim())) groups++;
-          }
-          const tp = up.find(p => p.stage === 'third' && p.match_id === 'selections');
-          if (tp) {
-            const parsedThirds = safeParse(tp.data);
-            if (Array.isArray(parsedThirds)) {
-              for (const t of parsedThirds) if (t && validGroupTeams.has(String(t).trim())) groups++;
-            }
-          }
+        for (const gp of up.filter(p => p.stage === 'groups')) {
+          extractCleanTeams(gp.data).forEach(team => {
+            if (actualGroupTeams.has(team)) groupsScore++;
+          });
         }
 
-        const knockoutScore = (stageKey, matchIds, pts) => {
-          const stageData = rawActual[stageKey];
-          if (!stageData) return 0;
+        const tp = up.find(p => p.stage === 'third' && p.match_id === 'selections');
+        if (tp) {
+          extractCleanTeams(tp.data).forEach(team => {
+            if (actualGroupTeams.has(team)) groupsScore++;
+          });
+        }
 
-          let s = 0;
+        // 2. Knockout Calculation Layer
+        const matchLookupScore = (stageKey, matchIds, pointsPerMatch) => {
+          const actualStageTeams = new Set(extractCleanTeams(rawActual[stageKey]));
+          if (actualStageTeams.size === 0) return 0;
+
+          let stagePoints = 0;
           for (const id of matchIds) {
+            // Find the prediction matching column data
             const pick = up.find(p => p.stage === 'knockout' && p.match_id === id);
-            if (pick && pick.data) {
-              const parsedPick = String(safeParse(pick.data)).trim();
-              
-              if (typeof stageData === 'object' && stageData[id] !== undefined) {
-                if (String(safeParse(stageData[id])).trim() === parsedPick) s += pts;
-              } else if (Array.isArray(stageData)) {
-                const standardizedArray = stageData.map(item => String(safeParse(item)).trim());
-                if (standardizedArray.includes(parsedPick)) s += pts;
-              } else if (typeof stageData === 'object' && stageData !== null) {
-                const standardizedValues = Object.values(stageData).map(item => String(safeParse(item)).trim());
-                if (standardizedValues.includes(parsedPick)) s += pts;
-              } else if (String(safeParse(stageData)).trim() === parsedPick) {
-                s += pts;
+            if (pick) {
+              const userPickedTeams = extractCleanTeams(pick.data);
+              if (userPickedTeams.some(team => actualStageTeams.has(team))) {
+                stagePoints += pointsPerMatch;
               }
             }
           }
-          return s;
+          return stagePoints;
         };
 
-        const r16 = knockoutScore(r16Key, R32_MATCH_IDS, 2);
-        const qf = knockoutScore(qfKey, R16_MATCH_IDS, 4);
-        const sf = knockoutScore(sfKey, QF_MATCH_IDS, 8);
-        const final = knockoutScore(finalKey, SF_MATCH_IDS, 16);
+        const r16 = matchLookupScore(targetR32Key, R32_MATCH_IDS, 2);
+        const qf = matchLookupScore(targetR16Key, R16_MATCH_IDS, 4);
+        const sf = matchLookupScore(targetQfKey, QF_MATCH_IDS, 8);
+        const final = matchLookupScore(targetSfKey, SF_MATCH_IDS, 16);
 
-        const champData = rawActual[champKey];
-        let champion = 0;
-        if (champData) {
+        // 3. Champion Verification
+        let championScore = 0;
+        const actualChampions = new Set(extractCleanTeams(rawActual[targetChampKey]));
+        if (actualChampions.size > 0) {
           const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
-          if (cp && cp.data) {
-            const parsedChampPick = String(safeParse(cp.data)).trim();
-            if (Array.isArray(champData)) {
-              const standardized = champData.map(item => String(safeParse(item)).trim());
-              if (standardized.includes(parsedChampPick)) champion = 32;
-            } else if (typeof champData === 'object' && champData !== null) {
-              const standardized = Object.values(champData).map(item => String(safeParse(item)).trim());
-              if (standardized.includes(parsedChampPick)) champion = 32;
-            } else if (String(safeParse(champData)).trim() === parsedChampPick) {
-              champion = 32;
+          if (cp) {
+            const userChampTeams = extractCleanTeams(cp.data);
+            if (userChampTeams.some(team => actualChampions.has(team))) {
+              championScore = 32;
             }
           }
         }
 
-        return groups + r16 + qf + sf + final + champion;
+        return groupsScore + r16 + qf + sf + final + championScore;
       };
 
-      const liveTotal = calculateScoreForKeys('live_r32', 'live_r16', 'live_qf', 'live_sf', 'live_final', 'live_champion');
-      const officialTotal = calculateScoreForKeys('r32', 'r16', 'qf', 'sf', 'final', 'champion');
+      const liveTotal = calculateScoreForTrack(true);
+      const officialTotal = calculateScoreForTrack(false);
 
       return { 
         user_id: user.id, 
