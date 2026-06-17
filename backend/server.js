@@ -154,7 +154,7 @@ app.post('/api/admin/results', async (req, res) => {
   if (!stage || !valid.includes(stage) || teams === undefined) return res.status(400).json({ error: 'Invalid' });
 
   try {
-    await pool.query(`
+    await pool.query suicide(`
       INSERT INTO actual_results (stage, teams, updated_at)
       VALUES ($1, $2, CURRENT_TIMESTAMP)
       ON CONFLICT(stage) DO UPDATE SET teams = EXCLUDED.teams, updated_at = CURRENT_TIMESTAMP
@@ -199,33 +199,52 @@ app.get('/api/scores', async (req, res) => {
 
         let groups = 0;
         if (groupData) {
-          // Flatten all group first/second selections into a clean array for swift evaluation
-          const validGroupTeams = [];
-          Object.values(groupData).forEach(g => {
-            if (g?.first) validGroupTeams.push(g.first);
-            if (g?.second) validGroupTeams.push(g.second);
-          });
-          const validGroupSet = new Set(validGroupTeams);
+          // Flatten all group team structures dynamically into a clean Set
+          const validGroupTeams = new Set();
+          if (Array.isArray(groupData)) {
+            groupData.forEach(t => { if (t) validGroupTeams.add(t); });
+          } else if (typeof groupData === 'object' && groupData !== null) {
+            Object.values(groupData).forEach(g => {
+              if (typeof g === 'string') {
+                validGroupTeams.add(g);
+              } else if (g && typeof g === 'object') {
+                if (g.first) validGroupTeams.add(g.first);
+                if (g.second) validGroupTeams.add(g.second);
+                if (g.third) validGroupTeams.add(g.third);
+                if (g.fourth) validGroupTeams.add(g.fourth);
+              }
+            });
+          }
 
           for (const gp of up.filter(p => p.stage === 'groups')) {
-            if (gp.data?.first && validGroupSet.has(gp.data.first)) groups++;
-            if (gp.data?.second && validGroupSet.has(gp.data.second)) groups++;
+            if (gp.data?.first && validGroupTeams.has(gp.data.first)) groups++;
+            if (gp.data?.second && validGroupTeams.has(gp.data.second)) groups++;
           }
           const tp = up.find(p => p.stage === 'third' && p.match_id === 'selections');
           if (tp && Array.isArray(tp.data)) {
-            for (const t of tp.data) if (t && validGroupSet.has(t)) groups++;
+            for (const t of tp.data) if (t && validGroupTeams.has(t)) groups++;
           }
         }
 
         const knockoutScore = (stageKey, matchIds, pts) => {
           const stageData = rawActual[stageKey];
           if (!stageData) return 0;
-          const set = new Set(Array.isArray(stageData) ? stageData : [stageData]);
-          
+
           let s = 0;
           for (const id of matchIds) {
             const pick = up.find(p => p.stage === 'knockout' && p.match_id === id);
-            if (pick?.data && set.has(pick.data)) s += pts;
+            if (pick?.data) {
+              // Adaptive matching: Checks objects by match ID, arrays, or flat keys flawlessly
+              if (typeof stageData === 'object' && stageData[id] !== undefined) {
+                if (stageData[id] === pick.data) s += pts;
+              } else if (Array.isArray(stageData)) {
+                if (stageData.includes(pick.data)) s += pts;
+              } else if (typeof stageData === 'object') {
+                if (Object.values(stageData).includes(pick.data)) s += pts;
+              } else if (stageData === pick.data) {
+                s += pts;
+              }
+            }
           }
           return s;
         };
@@ -238,9 +257,12 @@ app.get('/api/scores', async (req, res) => {
         const champData = rawActual[champKey];
         let champion = 0;
         if (champData) {
-          const champSet = new Set(Array.isArray(champData) ? champData : [champData]);
           const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
-          if (cp?.data && champSet.has(cp.data)) champion = 32;
+          if (cp?.data) {
+            if (Array.isArray(champData) && champData.includes(cp.data)) champion = 32;
+            else if (typeof champData === 'object' && Object.values(champData).includes(cp.data)) champion = 32;
+            else if (champData === cp.data) champion = 32;
+          }
         }
 
         return groups + r16 + qf + sf + final + champion;
