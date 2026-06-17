@@ -79,16 +79,19 @@ const R16_MATCH_IDS = ['r16_m89','r16_m90','r16_m93','r16_m94','r16_m91','r16_m9
 const QF_MATCH_IDS  = ['qf_01','qf_02','qf_03','qf_04'];
 const SF_MATCH_IDS  = ['sf_01','sf_02'];
 
-// ... (Users and Predictions Endpoints Remain Intact)
+// ── Users ────────────────────────────────────────────────────────────────────
 app.post('/api/users', async (req, res) => {
   const name = req.body?.name?.trim();
   if (!name) return res.status(400).json({ error: 'Name required' });
   try {
     const existing = await pool.query('SELECT * FROM users WHERE name = $1', [name]);
     if (existing.rows.length > 0) return res.json(existing.rows[0]);
+    
     const result = await pool.query('INSERT INTO users (name) VALUES ($1) RETURNING *', [name]);
     res.json(result.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/users', async (_req, res) => {
@@ -98,21 +101,32 @@ app.get('/api/users', async (_req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ── Predictions ──────────────────────────────────────────────────────────────
 app.post('/api/predictions/bulk', async (req, res) => {
   const { user_id, predictions } = req.body;
   if (!user_id || !Array.isArray(predictions)) return res.status(400).json({ error: 'Missing fields' });
+  
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const upsertQuery = `
       INSERT INTO predictions (user_id, stage, match_id, data, updated_at)
       VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-      ON CONFLICT(user_id, stage, match_id) DO UPDATE SET data = EXCLUDED.data, updated_at = CURRENT_TIMESTAMP
+      ON CONFLICT(user_id, stage, match_id) DO UPDATE SET
+        data = EXCLUDED.data,
+        updated_at = CURRENT_TIMESTAMP
     `;
-    for (const p of predictions) { await client.query(upsertQuery, [user_id, p.stage, p.match_id, JSON.stringify(p.data)]); }
+    for (const p of predictions) {
+      await client.query(upsertQuery, [user_id, p.stage, p.match_id, JSON.stringify(p.data)]);
+    }
     await client.query('COMMIT');
     res.json({ ok: true });
-  } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: err.message }); } finally { client.release(); }
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
 });
 
 app.get('/api/predictions/:userId', async (req, res) => {
@@ -122,6 +136,7 @@ app.get('/api/predictions/:userId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ── Admin ────────────────────────────────────────────────────────────────────
 function checkAdmin(req, res) {
   const pw = req.body?.password || req.query?.password;
   if (pw !== ADMIN_PASSWORD) { res.status(401).json({ error: 'Unauthorized' }); return false; }
@@ -156,7 +171,7 @@ app.get('/api/admin/results', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Scores (No Query Parameter Needed - Dual Calculation) ────────────────────
+// ── Scores ───────────────────────────────────────────────────────────────────
 app.get('/api/scores', async (_req, res) => {
   try {
     const usersRes = await pool.query('SELECT id, name FROM users');
@@ -166,26 +181,19 @@ app.get('/api/scores', async (_req, res) => {
     const users = usersRes.rows;
     const allPreds = predsRes.rows.map(r => ({ ...r, data: JSON.parse(r.data) }));
     
-    const actualOfficial = {};
-    const actualLive = {};
-    
+    // Keep a simple, flat map of exactly what is in the database
+    const actual = {};
     for (const r of actualRes.rows) {
       const parsedTeams = JSON.parse(r.teams);
-      const teamsSet = new Set(Array.isArray(parsedTeams) ? parsedTeams : [parsedTeams]);
-      
-      if (r.stage.startsWith('live_')) {
-        actualLive[r.stage.replace('live_', '')] = teamsSet;
-      } else {
-        actualOfficial[r.stage] = teamsSet;
-      }
+      actual[r.stage] = new Set(Array.isArray(parsedTeams) ? parsedTeams : [parsedTeams]);
     }
 
     const scores = users.map(user => {
       const up = allPreds.filter(p => p.user_id === user.id);
 
-      // Helper function to calculate score for a specific dataset object
-      const calculateTotalForDataset = (dataset) => {
-        const r32Set = dataset['r32'];
+      // Helper function that explicitly tries the requested keys
+      const calculateScore = (r32Key, r16Key, qfKey, sfKey, finalKey, champKey) => {
+        const r32Set = actual[r32Key];
         let groups = 0;
         if (r32Set) {
           for (const gp of up.filter(p => p.stage === 'groups')) {
@@ -197,7 +205,7 @@ app.get('/api/scores', async (_req, res) => {
         }
 
         const knockoutScore = (stageKey, matchIds, pts) => {
-          const set = dataset[stageKey];
+          const set = actual[stageKey];
           if (!set) return 0;
           let s = 0;
           for (const id of matchIds) {
@@ -207,12 +215,12 @@ app.get('/api/scores', async (_req, res) => {
           return s;
         };
 
-        const r16 = knockoutScore('r16', R32_MATCH_IDS, 2);
-        const qf = knockoutScore('qf', R16_MATCH_IDS, 4);
-        const sf = knockoutScore('sf', QF_MATCH_IDS, 8);
-        const final = knockoutScore('final', SF_MATCH_IDS, 16);
+        const r16 = knockoutScore(r16Key, R32_MATCH_IDS, 2);
+        const qf = knockoutScore(qfKey, R16_MATCH_IDS, 4);
+        const sf = knockoutScore(sfKey, QF_MATCH_IDS, 8);
+        const final = knockoutScore(finalKey, SF_MATCH_IDS, 16);
         
-        const champSet = dataset['champion'];
+        const champSet = actual[champKey];
         let champion = 0;
         if (champSet) {
           const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
@@ -222,28 +230,23 @@ app.get('/api/scores', async (_req, res) => {
         return groups + r16 + qf + sf + final + champion;
       };
 
-      // Compute BOTH calculations at the exact same time
-      const officialTotal = calculateTotalForDataset(actualOfficial);
-      const liveTotal = calculateTotalForDataset(actualLive);
+      // Compute with absolute keys directly matching database rows
+      const officialTotal = calculateScore('r32', 'r16', 'qf', 'sf', 'final', 'champion');
+      const liveTotal = calculateScore('live_r32', 'live_r16', 'live_qf', 'live_sf', 'live_final', 'live_champion');
 
-      // We attach every possible property name so the frontend gets exactly what it wants
       return { 
         user_id: user.id, 
         user_name: user.name, 
-        
-        // Properties mapping to the "Official" tab toggle
         total: officialTotal, 
         score: officialTotal,
         official_total: officialTotal,
-        
-        // Properties mapping to the "Live Trend" tab toggle
         live_total: liveTotal,
         live_score: liveTotal
       };
     });
 
-    // Check if the frontend requested a specific sort, otherwise default sort by live scores
-    scores.sort((a, b) => b.live_total - a.live_total);
+    // Sort by whichever dataset actually contains point values
+    scores.sort((a, b) => (b.live_total || b.total) - (a.live_total || a.total));
     res.json(scores);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -266,4 +269,4 @@ app.delete('/api/admin/users/:userId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(PORT, () => console.log(`World Cup Cloud API unified calculation engine online on port ${PORT}`));
+app.listen(PORT, () => console.log(`World Cup Cloud API flat engine online on port ${PORT}`));
