@@ -1,95 +1,148 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
+import { getScores } from '../api';
 
-export default function Leaderboard() {
-  const [mode, setMode] = useState('live'); // 'live' or 'official'
+export default function Leaderboard({ currentUser, onSelectUser }) {
   const [scores, setScores] = useState([]);
   const [loading, setLoading] = useState(true);
+  // Toggle between 'live' (fallback enabled) and 'official' (strict data only)
+  const [viewMode, setViewMode] = useState('live'); 
 
   useEffect(() => {
-    async function fetchScores() {
-      setLoading(true);
-      try {
-        // No query parameters needed—fetches the complete dataset safely
-        const response = await fetch('https://wc-2026-bracket-challenge.vercel.app/api/scores');
-        const data = await response.json();
-        setScores(data);
-      } catch (err) {
-        console.error("Error fetching leaderboard:", err);
-      } finally {
+    getScores()
+      .then(data => {
+        if (Array.isArray(data)) {
+          setScores(data);
+        }
         setLoading(false);
-      }
-    }
-    fetchScores();
+      })
+      .catch((err) => {
+        console.error("Error loading standings:", err);
+        setLoading(false);
+      });
   }, []);
 
-  // Dynamically sort the local state array based on the chosen tab mode
+  if (loading) return <div className="leaderboard-loading">Loading standings...</div>;
+
+  // Safe client-side sorting to make sure the rows stay perfectly ordered by active tab
   const sortedScores = [...scores].sort((a, b) => {
-    const scoreA = mode === 'live' ? (a.live_total ?? 0) : (a.official_total ?? 0);
-    const scoreB = mode === 'live' ? (b.live_total ?? 0) : (b.official_total ?? 0);
+    const scoreA = viewMode === 'live' 
+      ? (a.live_total ?? a.total_points ?? a.total ?? 0)
+      : (a.official_total ?? a.total ?? 0);
+    const scoreB = viewMode === 'live' 
+      ? (b.live_total ?? b.total_points ?? b.total ?? 0)
+      : (b.official_total ?? b.total ?? 0);
     return scoreB - scoreA;
   });
 
   return (
-    <div className="w-full max-w-4xl mx-auto bg-[#111827]/50 backdrop-blur-md rounded-2xl border border-gray-800 p-6 shadow-xl mt-6">
-      {/* Header & Tab Switcher */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-        <h2 className="text-xl font-bold text-white tracking-wide">Tournament Standings</h2>
-        
-        <div className="flex bg-gray-900/80 p-1 rounded-xl border border-gray-800">
-          <button
-            onClick={() => setMode('live')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 ${
-              mode === 'live'
-                ? 'bg-blue-600 text-white shadow-lg'
-                : 'text-gray-400 hover:text-white'
-            }`}
+    <div className="leaderboard-card">
+      {/* View Mode Toggle Header */}
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'space-between', 
+        alignItems: 'center', 
+        marginBottom: '20px',
+        padding: '0 4px'
+      }}>
+        <div style={{ fontSize: '16px', fontWeight: '750', color: 'var(--text)' }}>
+          Tournament Standings
+        </div>
+        <div style={{ 
+          display: 'flex', 
+          background: 'var(--surface2)', 
+          padding: '4px', 
+          borderRadius: '8px',
+          border: '1px solid var(--border)'
+        }}>
+          <button 
+            onClick={() => setViewMode('live')}
+            style={{
+              padding: '6px 12px',
+              fontSize: '12px',
+              fontWeight: '600',
+              borderRadius: '6px',
+              border: 'none',
+              cursor: 'pointer',
+              background: viewMode === 'live' ? 'var(--blue)' : 'transparent',
+              color: viewMode === 'live' ? '#fff' : 'var(--text-dim)',
+              transition: 'all 0.2s ease'
+            }}
           >
             ⚡ Live Trend
           </button>
-          <button
-            onClick={() => setMode('official')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 ${
-              mode === 'official'
-                ? 'bg-amber-500 text-black font-bold shadow-lg'
-                : 'text-gray-400 hover:text-white'
-            }`}
+          <button 
+            onClick={() => setViewMode('official')}
+            style={{
+              padding: '6px 12px',
+              fontSize: '12px',
+              fontWeight: '600',
+              borderRadius: '6px',
+              border: 'none',
+              cursor: 'pointer',
+              background: viewMode === 'official' ? 'var(--gold)' : 'transparent',
+              color: viewMode === 'official' ? '#000' : 'var(--text-dim)',
+              transition: 'all 0.2s ease'
+            }}
           >
             🏆 Official
           </button>
         </div>
       </div>
 
-      {loading ? (
-        <div className="text-center py-8 text-gray-400 animate-pulse">Loading standings...</div>
-      ) : (
-        <div className="overflow-x-auto rounded-xl border border-gray-800/60">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-gray-900/50 text-gray-400 text-xs font-bold uppercase tracking-wider border-b border-gray-800">
-                <th className="py-3 px-4 w-16">#</th>
-                <th className="py-3 px-4">Participant</th>
-                <th className="py-3 px-4 text-right w-24">Pts</th>
+      {/* Leaderboard Table View */}
+      <table className="leaderboard-table">
+        <thead>
+          <tr>
+            <th className="col-rank">#</th>
+            <th className="col-name">Participant</th>
+            <th className="col-score">Pts</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sortedScores.map((row, i) => {
+            const isMe = currentUser && row.user_id === currentUser.id;
+            
+            // Safe alignment matching whatever naming conversion your Supabase payload uses
+            const pointsToDisplay = viewMode === 'live'
+              ? (row.live_total ?? row.total_points ?? row.total ?? 0)
+              : (row.official_total ?? row.total ?? 0);
+
+            return (
+              <tr key={row.user_id || i} className={isMe ? 'row-me' : ''}>
+                <td className="col-rank">{i + 1}</td>
+                <td className="col-name">
+                  <span 
+                    className="leaderboard-name-link"
+                    onClick={() => onSelectUser && onSelectUser({ id: row.user_id, name: row.user_name })}
+                    style={{ 
+                      cursor: 'pointer', 
+                      fontWeight: isMe ? '800' : '500',
+                      textDecoration: 'underline',
+                      textDecorationColor: 'rgba(255,255,255,0.2)'
+                    }}
+                  >
+                    {row.user_name || 'Unknown'}
+                  </span>
+                  {isMe && <span className="me-badge">YOU</span>}
+                </td>
+                <td className="col-score" style={{ 
+                  color: viewMode === 'live' ? 'var(--blue-light)' : 'var(--gold)',
+                  fontWeight: '700'
+                }}>
+                  {pointsToDisplay}
+                </td>
               </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-800/40 text-gray-300">
-              {sortedScores.map((user, index) => {
-                const displayPoints = mode === 'live' ? (user.live_total ?? 0) : (user.official_total ?? 0);
-                return (
-                  <tr key={user.user_id} className="hover:bg-gray-800/20 transition-colors">
-                    <td className="py-3 px-4 font-semibold text-gray-500">{index + 1}</td>
-                    <td className="py-3 px-4 font-medium text-white">{user.user_name}</td>
-                    <td className={`py-3 px-4 text-right font-bold text-base ${
-                      mode === 'live' ? 'text-blue-400' : 'text-amber-400'
-                    }`}>
-                      {displayPoints}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+            );
+          })}
+          {sortedScores.length === 0 && (
+            <tr>
+              <td colSpan="3" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-dim)' }}>
+                No predictions submitted yet. Be the first!
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }
