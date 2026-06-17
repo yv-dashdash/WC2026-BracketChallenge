@@ -35,7 +35,6 @@ const pool = new Pool({
 const initDb = async () => {
   const client = await pool.connect();
   try {
-    await client.query suicide; // Purposely left out - keeping your core table schema safe
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -67,7 +66,6 @@ const initDb = async () => {
 };
 initDb();
 
-// ── Fixed Admin Password Restored Exactly ──
 const ADMIN_PASSWORD = 'SoftIsBeautiful2026';
 
 function checkAdmin(req, res) {
@@ -81,28 +79,63 @@ const R32_MATCH_IDS = [
   'r32_m74','r32_m77','r32_m73','r32_m75',
   'r32_m83','r32_m84','r32_m81','r32_m82',
   'r32_m76','r32_m78','r32_m79','r32_m80',
-  'r32_m86','r32_m88','r32_m85','r32_m87',
+  'r32_m86','r38_m88','r32_m85','r32_m87',
 ];
 const R16_MATCH_IDS = ['r16_m89','r16_m90','r16_m93','r16_m94','r16_m91','r16_m92','r16_m95','r16_m96'];
 const QF_MATCH_IDS  = ['qf_01','qf_02','qf_03','qf_04'];
 const SF_MATCH_IDS  = ['sf_01','sf_02'];
 
-// Extracts pure lowercase string arrays from any nested JSON formatting anomalies
+// Helper to reliably unwrap double-stringified JSON structures
+function safeParse(val) {
+  if (!val) return null;
+  if (typeof val !== 'string') return val;
+  try {
+    const p = JSON.parse(val);
+    return typeof p === 'string' ? safeParse(p) : p;
+  } catch (e) {
+    return val;
+  }
+}
+
+// Structured Team Extractor: Discards historical nested stringified junk items
 function extractCleanTeams(mixedData) {
-  if (!mixedData) return [];
-  const rawString = typeof mixedData === 'string' ? mixedData : JSON.stringify(mixedData);
+  const parsed = safeParse(mixedData);
+  if (!parsed) return [];
   
-  const pattern = /[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s'.-]{1,25}[A-Za-zÀ-ÿ]/g;
-  const found = rawString.match(pattern) || [];
-  
-  const ignoreKeywords = [
-    'stage', 'match', 'match_id', 'data', 'teams', 'true', 'false', 
-    'first', 'second', 'third', 'fourth', 'groups', 'live_groups', 'knockout', 'selections'
-  ];
-  
-  return found
-    .map(name => name.trim().toLowerCase())
-    .filter(name => name.length > 2 && !ignoreKeywords.includes(name));
+  let candidates = [];
+  if (Array.isArray(parsed)) {
+    candidates = parsed;
+  } else if (typeof parsed === 'object') {
+    candidates = Object.values(parsed);
+  } else if (typeof parsed === 'string') {
+    candidates = [parsed];
+  }
+
+  const output = [];
+  for (const item of candidates) {
+    if (!item) continue;
+    
+    // If an item is an array or object, recurse into it
+    if (typeof item === 'object') {
+      extractCleanTeams(item).forEach(t => output.push(t));
+      continue;
+    }
+
+    const str = String(item).trim();
+    
+    // CRITICAL FILTER: If this item contains array/object hallmarks, it is historical backup junk.
+    // Clean team names will never contain brackets, backslashes, or double quotes inside them.
+    if (str.includes('[') || str.includes(']') || str.includes('\\') || str.includes('"') || str.length > 30) {
+      continue; 
+    }
+
+    if (str.length > 1) {
+      output.push(str.toLowerCase());
+    }
+  }
+
+  // Deduplicate items cleanly
+  return [...new Set(output)];
 }
 
 // ── User Endpoints ───────────────────────────────────────────────────────────
@@ -156,15 +189,11 @@ app.post('/api/predictions/bulk', async (req, res) => {
 app.get('/api/predictions/:userId', async (req, res) => {
   try {
     const result = await pool.query('SELECT stage, match_id, data FROM predictions WHERE user_id = $1', [req.params.userId]);
-    res.json(result.rows.map(r => {
-      let parsed = r.data;
-      try { parsed = JSON.parse(r.data); } catch(e){}
-      return { stage: r.stage, match_id: r.match_id, data: parsed };
-    }));
+    res.json(result.rows.map(r => ({ stage: r.stage, match_id: r.match_id, data: safeParse(r.data) })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Admin Configuration Endpoints (CRITICAL SANITIZATION UPDATE) ──
+// ── Admin Configuration Endpoints ───────────────────────────────────────────
 app.post('/api/admin/results', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   const { stage, teams } = req.body;
@@ -176,18 +205,15 @@ app.post('/api/admin/results', async (req, res) => {
   ];
   if (!stage || !valid.includes(stage) || teams === undefined) return res.status(400).json({ error: 'Invalid' });
 
-  // CRITICAL FIX: Break the accumulation snowball effect.
-  // Instead of saving raw double-stringified objects directly into the DB,
-  // we look at what came from the frontend, grab only the active text items,
-  // and store them as a perfectly clean, flat single-tier array.
-  const pristineTeamList = extractCleanTeams(teams);
+  // Filter out any historical garbage right as it hits the server
+  const cleanCurrentSelection = extractCleanTeams(teams);
 
   try {
     await pool.query(`
       INSERT INTO actual_results (stage, teams, updated_at)
       VALUES ($1, $2, CURRENT_TIMESTAMP)
       ON CONFLICT(stage) DO UPDATE SET teams = EXCLUDED.teams, updated_at = CURRENT_TIMESTAMP
-    `, [stage, JSON.stringify(pristineTeamList)]);
+    `, [stage, JSON.stringify(cleanCurrentSelection)]);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -198,9 +224,7 @@ app.get('/api/admin/results', async (req, res) => {
     const rows = await pool.query('SELECT stage, teams, updated_at FROM actual_results');
     const result = {};
     for (const r of rows.rows) {
-      let parsed = r.teams;
-      try { parsed = JSON.parse(r.teams); } catch(e){}
-      result[r.stage] = { teams: parsed, updated_at: r.updated_at };
+      result[r.stage] = { teams: safeParse(r.teams), updated_at: r.updated_at };
     }
     res.json(result);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -232,7 +256,7 @@ app.get('/api/scores', async (req, res) => {
         const targetSfKey = isLive ? 'live_sf' : 'sf';
         const targetChampKey = isLive ? 'live_champion' : 'champion';
 
-        // 1. Group Stage Parsing
+        // 1. Group Stage Verification
         const actualGroupTeams = new Set(extractCleanTeams(rawActual[targetGroupKey]));
         let groupsScore = 0;
 
@@ -249,7 +273,7 @@ app.get('/api/scores', async (req, res) => {
           });
         }
 
-        // 2. Knockout Calculation Layer
+        // 2. Knockout Match Lookup
         const matchLookupScore = (stageKey, matchIds, pointsPerMatch) => {
           const actualStageTeams = new Set(extractCleanTeams(rawActual[stageKey]));
           if (actualStageTeams.size === 0) return 0;
