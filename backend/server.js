@@ -47,14 +47,14 @@ const initDb = async () => {
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         stage TEXT NOT NULL,
         match_id TEXT NOT NULL,
-        data TEXT NOT NULL,
+        data JSONB NOT NULL,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT unique_user_stage_match UNIQUE(user_id, stage, match_id)
       );
 
       CREATE TABLE IF NOT EXISTS actual_results (
         stage TEXT PRIMARY KEY,
-        teams TEXT NOT NULL,
+        teams JSONB NOT NULL,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
@@ -83,7 +83,7 @@ const R32_MATCH_IDS = [
   'r32_m74','r32_m77','r32_m73','r32_m75',
   'r32_m83','r32_m84','r32_m81','r32_m82',
   'r32_m76','r32_m78','r32_m79','r32_m80',
-  'r32_m86','r32_m88','r32_m85','r32_m87',
+  'r32_m86','r38_m88','r35_m85','r32_m87',
 ];
 const R16_MATCH_IDS = ['r16_m89','r16_m90','r16_m93','r16_m94','r16_m91','r16_m92','r16_m95','r16_m96'];
 const QF_MATCH_IDS  = ['qf_01','qf_02','qf_03','qf_04'];
@@ -142,7 +142,7 @@ app.post('/api/predictions/bulk', async (req, res) => {
 app.get('/api/predictions/:userId', async (req, res) => {
   try {
     const result = await pool.query('SELECT stage, match_id, data FROM predictions WHERE user_id = $1', [req.params.userId]);
-    res.json(result.rows.map(r => ({ stage: r.stage, match_id: r.match_id, data: JSON.parse(r.data) })));
+    res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -151,7 +151,6 @@ app.post('/api/admin/results', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   const { stage, teams } = req.body;
   
-  // Whitelist groups and live_groups safely to unblock your updates
   const valid = [
     'groups', 'live_groups',
     'r32', 'r16', 'qf', 'sf', 'final', 'champion',
@@ -174,7 +173,9 @@ app.get('/api/admin/results', async (req, res) => {
   try {
     const rows = await pool.query('SELECT stage, teams, updated_at FROM actual_results');
     const result = {};
-    for (const r of rows.rows) result[r.stage] = { teams: JSON.parse(r.teams), updated_at: r.updated_at };
+    for (const r of rows.rows) {
+      result[r.stage] = { teams: r.teams, updated_at: r.updated_at };
+    }
     res.json(result);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -187,11 +188,11 @@ app.get('/api/scores', async (_req, res) => {
     const actualRes = await pool.query('SELECT stage, teams FROM actual_results');
 
     const users = usersRes.rows;
-    const allPreds = predsRes.rows.map(r => ({ ...r, data: JSON.parse(r.data) }));
+    const allPreds = predsRes.rows;
     
     const actual = {};
     for (const r of actualRes.rows) {
-      const parsedTeams = JSON.parse(r.teams);
+      const parsedTeams = r.teams;
       actual[r.stage] = new Set(Array.isArray(parsedTeams) ? parsedTeams : [parsedTeams]);
     }
 
@@ -199,18 +200,19 @@ app.get('/api/scores', async (_req, res) => {
       const up = allPreds.filter(p => p.user_id === user.id);
 
       const calculateScoreForKeys = (r32Key, r16Key, qfKey, sfKey, finalKey, champKey) => {
-        // Group points alignment based on selection track
         const targetGroupKey = (r32Key.startsWith('live_')) ? 'live_groups' : 'groups';
         const r32Set = actual[targetGroupKey];
         
         let groups = 0;
         if (r32Set) {
           for (const gp of up.filter(p => p.stage === 'groups')) {
-            if (gp.data.first && r32Set.has(gp.data.first)) groups++;
-            if (gp.data.second && r32Set.has(gp.data.second)) groups++;
+            if (gp.data?.first && r32Set.has(gp.data.first)) groups++;
+            if (gp.data?.second && r32Set.has(gp.data.second)) groups++;
           }
           const tp = up.find(p => p.stage === 'third' && p.match_id === 'selections');
-          if (tp && Array.isArray(tp.data)) for (const t of tp.data) if (t && r32Set.has(t)) groups++;
+          if (tp && Array.isArray(tp.data)) {
+            for (const t of tp.data) if (t && r32Set.has(t)) groups++;
+          }
         }
 
         const knockoutScore = (stageKey, matchIds, pts) => {
