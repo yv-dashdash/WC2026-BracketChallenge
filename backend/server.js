@@ -47,14 +47,14 @@ const initDb = async () => {
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         stage TEXT NOT NULL,
         match_id TEXT NOT NULL,
-        data JSONB NOT NULL,
+        data TEXT NOT NULL,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT unique_user_stage_match UNIQUE(user_id, stage, match_id)
       );
 
       CREATE TABLE IF NOT EXISTS actual_results (
         stage TEXT PRIMARY KEY,
-        teams JSONB NOT NULL,
+        teams TEXT NOT NULL,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
@@ -137,7 +137,7 @@ app.post('/api/predictions/bulk', async (req, res) => {
 app.get('/api/predictions/:userId', async (req, res) => {
   try {
     const result = await pool.query('SELECT stage, match_id, data FROM predictions WHERE user_id = $1', [req.params.userId]);
-    res.json(result.rows);
+    res.json(result.rows.map(r => ({ stage: r.stage, match_id: r.match_id, data: JSON.parse(r.data) })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -169,9 +169,7 @@ app.get('/api/admin/results', async (req, res) => {
     const rows = await pool.query('SELECT stage, teams, updated_at FROM actual_results');
     const result = {};
     for (const r of rows.rows) {
-      // Safe dynamic reading: Handles data whether stored as a string or raw object
-      const parsedTeams = typeof r.teams === 'string' ? JSON.parse(r.teams) : r.teams;
-      result[r.stage] = { teams: parsedTeams, updated_at: r.updated_at };
+      result[r.stage] = { teams: JSON.parse(r.teams), updated_at: r.updated_at };
     }
     res.json(result);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -185,39 +183,45 @@ app.get('/api/scores', async (req, res) => {
     const actualRes = await pool.query('SELECT stage, teams FROM actual_results');
 
     const users = usersRes.rows;
-    const allPreds = predsRes.rows.map(r => ({
-      ...r,
-      data: typeof r.data === 'string' ? JSON.parse(r.data) : r.data
-    }));
+    const allPreds = predsRes.rows.map(r => ({ ...r, data: JSON.parse(r.data) }));
 
-    const actual = {};
+    const rawActual = {};
     for (const r of actualRes.rows) {
-      const parsedTeams = typeof r.teams === 'string' ? JSON.parse(r.teams) : r.teams;
-      actual[r.stage] = new Set(Array.isArray(parsedTeams) ? parsedTeams : [parsedTeams]);
+      rawActual[r.stage] = JSON.parse(r.teams);
     }
 
     const scores = users.map(user => {
       const up = allPreds.filter(p => p.user_id === user.id);
 
       const calculateScoreForKeys = (r32Key, r16Key, qfKey, sfKey, finalKey, champKey) => {
-        const targetGroupKey = (r32Key.startsWith('live_')) ? 'live_groups' : 'groups';
-        const r32Set = actual[targetGroupKey];
+        const targetGroupKey = r32Key.startsWith('live_') ? 'live_groups' : 'groups';
+        const groupData = rawActual[targetGroupKey];
 
         let groups = 0;
-        if (r32Set) {
+        if (groupData) {
+          // Flatten all group first/second selections into a clean array for swift evaluation
+          const validGroupTeams = [];
+          Object.values(groupData).forEach(g => {
+            if (g?.first) validGroupTeams.push(g.first);
+            if (g?.second) validGroupTeams.push(g.second);
+          });
+          const validGroupSet = new Set(validGroupTeams);
+
           for (const gp of up.filter(p => p.stage === 'groups')) {
-            if (gp.data?.first && r32Set.has(gp.data.first)) groups++;
-            if (gp.data?.second && r32Set.has(gp.data.second)) groups++;
+            if (gp.data?.first && validGroupSet.has(gp.data.first)) groups++;
+            if (gp.data?.second && validGroupSet.has(gp.data.second)) groups++;
           }
           const tp = up.find(p => p.stage === 'third' && p.match_id === 'selections');
           if (tp && Array.isArray(tp.data)) {
-            for (const t of tp.data) if (t && r32Set.has(t)) groups++;
+            for (const t of tp.data) if (t && validGroupSet.has(t)) groups++;
           }
         }
 
         const knockoutScore = (stageKey, matchIds, pts) => {
-          const set = actual[stageKey];
-          if (!set) return 0;
+          const stageData = rawActual[stageKey];
+          if (!stageData) return 0;
+          const set = new Set(Array.isArray(stageData) ? stageData : [stageData]);
+          
           let s = 0;
           for (const id of matchIds) {
             const pick = up.find(p => p.stage === 'knockout' && p.match_id === id);
@@ -231,9 +235,10 @@ app.get('/api/scores', async (req, res) => {
         const sf = knockoutScore(sfKey, QF_MATCH_IDS, 8);
         const final = knockoutScore(finalKey, SF_MATCH_IDS, 16);
 
-        const champSet = actual[champKey];
+        const champData = rawActual[champKey];
         let champion = 0;
-        if (champSet) {
+        if (champData) {
+          const champSet = new Set(Array.isArray(champData) ? champData : [champData]);
           const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
           if (cp?.data && champSet.has(cp.data)) champion = 32;
         }
