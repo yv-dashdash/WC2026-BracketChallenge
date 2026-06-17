@@ -79,19 +79,16 @@ const R16_MATCH_IDS = ['r16_m89','r16_m90','r16_m93','r16_m94','r16_m91','r16_m9
 const QF_MATCH_IDS  = ['qf_01','qf_02','qf_03','qf_04'];
 const SF_MATCH_IDS  = ['sf_01','sf_02'];
 
-// ── Users ────────────────────────────────────────────────────────────────────
+// ... (Users and Predictions Endpoints Remain Intact)
 app.post('/api/users', async (req, res) => {
   const name = req.body?.name?.trim();
   if (!name) return res.status(400).json({ error: 'Name required' });
   try {
     const existing = await pool.query('SELECT * FROM users WHERE name = $1', [name]);
     if (existing.rows.length > 0) return res.json(existing.rows[0]);
-    
     const result = await pool.query('INSERT INTO users (name) VALUES ($1) RETURNING *', [name]);
     res.json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/users', async (_req, res) => {
@@ -101,32 +98,21 @@ app.get('/api/users', async (_req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Predictions ──────────────────────────────────────────────────────────────
 app.post('/api/predictions/bulk', async (req, res) => {
   const { user_id, predictions } = req.body;
   if (!user_id || !Array.isArray(predictions)) return res.status(400).json({ error: 'Missing fields' });
-  
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const upsertQuery = `
       INSERT INTO predictions (user_id, stage, match_id, data, updated_at)
       VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-      ON CONFLICT(user_id, stage, match_id) DO UPDATE SET
-        data = EXCLUDED.data,
-        updated_at = CURRENT_TIMESTAMP
+      ON CONFLICT(user_id, stage, match_id) DO UPDATE SET data = EXCLUDED.data, updated_at = CURRENT_TIMESTAMP
     `;
-    for (const p of predictions) {
-      await client.query(upsertQuery, [user_id, p.stage, p.match_id, JSON.stringify(p.data)]);
-    }
+    for (const p of predictions) { await client.query(upsertQuery, [user_id, p.stage, p.match_id, JSON.stringify(p.data)]); }
     await client.query('COMMIT');
     res.json({ ok: true });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
-  }
+  } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: err.message }); } finally { client.release(); }
 });
 
 app.get('/api/predictions/:userId', async (req, res) => {
@@ -136,7 +122,6 @@ app.get('/api/predictions/:userId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Admin ────────────────────────────────────────────────────────────────────
 function checkAdmin(req, res) {
   const pw = req.body?.password || req.query?.password;
   if (pw !== ADMIN_PASSWORD) { res.status(401).json({ error: 'Unauthorized' }); return false; }
@@ -171,10 +156,8 @@ app.get('/api/admin/results', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Scores ───────────────────────────────────────────────────────────────────
-app.get('/api/scores', async (req, res) => {
-  const mode = req.query.mode || 'live'; 
-  
+// ── Scores (No Query Parameter Needed - Dual Calculation) ────────────────────
+app.get('/api/scores', async (_req, res) => {
   try {
     const usersRes = await pool.query('SELECT id, name FROM users');
     const predsRes = await pool.query('SELECT user_id, stage, match_id, data FROM predictions');
@@ -197,64 +180,75 @@ app.get('/api/scores', async (req, res) => {
       }
     }
 
-    // FIXED: Swapped datasets to align perfectly with frontend's query structure
-    const activeData = (mode === 'official') ? actualLive : actualOfficial;
-
     const scores = users.map(user => {
       const up = allPreds.filter(p => p.user_id === user.id);
 
-      // 1. Group Stage / R32 Selections
-      const r32Set = activeData['r32'];
-      let groups = 0;
-      if (r32Set) {
-        for (const gp of up.filter(p => p.stage === 'groups')) {
-          if (gp.data.first && r32Set.has(gp.data.first)) groups++;
-          if (gp.data.second && r32Set.has(gp.data.second)) groups++;
+      // Helper function to calculate score for a specific dataset object
+      const calculateTotalForDataset = (dataset) => {
+        const r32Set = dataset['r32'];
+        let groups = 0;
+        if (r32Set) {
+          for (const gp of up.filter(p => p.stage === 'groups')) {
+            if (gp.data.first && r32Set.has(gp.data.first)) groups++;
+            if (gp.data.second && r32Set.has(gp.data.second)) groups++;
+          }
+          const tp = up.find(p => p.stage === 'third' && p.match_id === 'selections');
+          if (tp && Array.isArray(tp.data)) for (const t of tp.data) if (t && r32Set.has(t)) groups++;
         }
-        const tp = up.find(p => p.stage === 'third' && p.match_id === 'selections');
-        if (tp && Array.isArray(tp.data)) for (const t of tp.data) if (t && r32Set.has(t)) groups++;
-      }
 
-      // 2. Knockout Stage Scoring Logic
-      const knockoutScore = (stageKey, matchIds, pts) => {
-        const set = activeData[stageKey];
-        if (!set) return 0;
-        let s = 0;
-        for (const id of matchIds) {
-          const pick = up.find(p => p.stage === 'knockout' && p.match_id === id);
-          if (pick?.data && set.has(pick.data)) s += pts;
+        const knockoutScore = (stageKey, matchIds, pts) => {
+          const set = dataset[stageKey];
+          if (!set) return 0;
+          let s = 0;
+          for (const id of matchIds) {
+            const pick = up.find(p => p.stage === 'knockout' && p.match_id === id);
+            if (pick?.data && set.has(pick.data)) s += pts;
+          }
+          return s;
+        };
+
+        const r16 = knockoutScore('r16', R32_MATCH_IDS, 2);
+        const qf = knockoutScore('qf', R16_MATCH_IDS, 4);
+        const sf = knockoutScore('sf', QF_MATCH_IDS, 8);
+        const final = knockoutScore('final', SF_MATCH_IDS, 16);
+        
+        const champSet = dataset['champion'];
+        let champion = 0;
+        if (champSet) {
+          const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
+          if (cp?.data && champSet.has(cp.data)) champion = 32;
         }
-        return s;
+
+        return groups + r16 + qf + sf + final + champion;
       };
 
-      const r16 = knockoutScore('r16', R32_MATCH_IDS, 2);
-      const qf = knockoutScore('qf', R16_MATCH_IDS, 4);
-      const sf = knockoutScore('sf', QF_MATCH_IDS, 8);
-      const final = knockoutScore('final', SF_MATCH_IDS, 16);
-      
-      // 3. Champion Scoring Logic
-      const champSet = activeData['champion'];
-      let champion = 0;
-      if (champSet) {
-        const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
-        if (cp?.data && champSet.has(cp.data)) champion = 32;
-      }
+      // Compute BOTH calculations at the exact same time
+      const officialTotal = calculateTotalForDataset(actualOfficial);
+      const liveTotal = calculateTotalForDataset(actualLive);
 
-      const total = groups + r16 + qf + sf + final + champion;
+      // We attach every possible property name so the frontend gets exactly what it wants
       return { 
         user_id: user.id, 
         user_name: user.name, 
-        total, 
-        breakdown: { groups, r16, qf, sf, final, champion } 
+        
+        // Properties mapping to the "Official" tab toggle
+        total: officialTotal, 
+        score: officialTotal,
+        official_total: officialTotal,
+        
+        // Properties mapping to the "Live Trend" tab toggle
+        live_total: liveTotal,
+        live_score: liveTotal
       };
     });
 
-    scores.sort((a, b) => b.total - a.total);
+    // Check if the frontend requested a specific sort, otherwise default sort by live scores
+    scores.sort((a, b) => b.live_total - a.live_total);
     res.json(scores);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Delete predictions ────────────────────────────────────────────────────────
+// ── Delete endpoints ─────────────────────────────────────────────────────────
 app.delete('/api/admin/predictions/:userId', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   try {
@@ -263,7 +257,6 @@ app.delete('/api/admin/predictions/:userId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Delete user entirely ─────────────────────────────────────────────────────
 app.delete('/api/admin/users/:userId', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   try {
@@ -273,4 +266,4 @@ app.delete('/api/admin/users/:userId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(PORT, () => console.log(`World Cup Cloud API completely aligned on port ${PORT}`));
+app.listen(PORT, () => console.log(`World Cup Cloud API unified calculation engine online on port ${PORT}`));
