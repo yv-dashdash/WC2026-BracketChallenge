@@ -172,9 +172,7 @@ app.get('/api/admin/results', async (req, res) => {
 });
 
 // ── Scores ───────────────────────────────────────────────────────────────────
-app.get('/api/scores', async (req, res) => {
-  const mode = req.query.mode || 'live'; 
-  
+app.get('/api/scores', async (_req, res) => {
   try {
     const usersRes = await pool.query('SELECT id, name FROM users');
     const predsRes = await pool.query('SELECT user_id, stage, match_id, data FROM predictions');
@@ -230,20 +228,19 @@ app.get('/api/scores', async (req, res) => {
         return groups + r16 + qf + sf + final + champion;
       };
 
-      // Explicitly separate the targets to line up with the tab toggles perfectly
       const liveTotal = calculateScoreForKeys('live_r32', 'live_r16', 'live_qf', 'live_sf', 'live_final', 'live_champion');
       const officialTotal = calculateScoreForKeys('r32', 'r16', 'qf', 'sf', 'final', 'champion');
-
-      const activeTotal = (mode === 'official') ? officialTotal : liveTotal;
 
       return { 
         user_id: user.id, 
         user_name: user.name, 
-        total: activeTotal
+        live_total: liveTotal,
+        official_total: officialTotal
       };
     });
 
-    scores.sort((a, b) => b.total - a.total);
+    // Default API sorting array configuration
+    scores.sort((a, b) => b.live_total - a.live_total);
     res.json(scores);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -266,4 +263,4 @@ app.delete('/api/admin/users/:userId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(PORT, () => console.log(`World Cup Cloud API tab-synchronized scoring engine online on port ${PORT}`));
+app.listen(PORT, () => console.log(`World Cup Cloud API absolute non-parameterized engine online on port ${PORT}`));

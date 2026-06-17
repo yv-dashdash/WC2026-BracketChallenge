@@ -9,7 +9,8 @@ export default function Leaderboard() {
     async function fetchScores() {
       setLoading(true);
       try {
-        const response = await fetch(`https://wc-2026-bracket-challenge.vercel.app/api/scores?mode=${mode}`);
+        // No query parameters needed—fetches the complete dataset safely
+        const response = await fetch('https://wc-2026-bracket-challenge.vercel.app/api/scores');
         const data = await response.json();
         setScores(data);
       } catch (err) {
@@ -19,13 +20,20 @@ export default function Leaderboard() {
       }
     }
     fetchScores();
-  }, [mode]);
+  }, []);
+
+  // Dynamically sort the local state array based on the chosen tab mode
+  const sortedScores = [...scores].sort((a, b) => {
+    const scoreA = mode === 'live' ? (a.live_total ?? 0) : (a.official_total ?? 0);
+    const scoreB = mode === 'live' ? (b.live_total ?? 0) : (b.official_total ?? 0);
+    return scoreB - scoreA;
+  });
 
   return (
-    <div className="w-full max-w-4xl mx-auto bg-[#111827]/50 backdrop-blur-md rounded-2xl border border-gray-800 p-6 shadow-xl">
+    <div className="w-full max-w-4xl mx-auto bg-[#111827]/50 backdrop-blur-md rounded-2xl border border-gray-800 p-6 shadow-xl mt-6">
       {/* Header & Tab Switcher */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-        <h2 className="text-2xl font-bold text-white tracking-wide">Tournament Standings</h2>
+        <h2 className="text-xl font-bold text-white tracking-wide">Tournament Standings</h2>
         
         <div className="flex bg-gray-900/80 p-1 rounded-xl border border-gray-800">
           <button
@@ -64,17 +72,20 @@ export default function Leaderboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800/40 text-gray-300">
-              {scores.map((user, index) => (
-                <tr key={user.user_id} className="hover:bg-gray-800/20 transition-colors">
-                  <td className="py-3 px-4 font-semibold text-gray-500">{index + 1}</td>
-                  <td className="py-3 px-4 font-medium text-white border-b border-transparent">{user.user_name}</td>
-                  <td className={`py-3 px-4 text-right font-bold text-base ${
-                    mode === 'live' ? 'text-blue-400' : 'text-amber-400'
-                  }`}>
-                    {user.total}
-                  </td>
-                </tr>
-              ))}
+              {sortedScores.map((user, index) => {
+                const displayPoints = mode === 'live' ? (user.live_total ?? 0) : (user.official_total ?? 0);
+                return (
+                  <tr key={user.user_id} className="hover:bg-gray-800/20 transition-colors">
+                    <td className="py-3 px-4 font-semibold text-gray-500">{index + 1}</td>
+                    <td className="py-3 px-4 font-medium text-white">{user.user_name}</td>
+                    <td className={`py-3 px-4 text-right font-bold text-base ${
+                      mode === 'live' ? 'text-blue-400' : 'text-amber-400'
+                    }`}>
+                      {displayPoints}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
