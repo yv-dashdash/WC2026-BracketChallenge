@@ -47,14 +47,14 @@ const initDb = async () => {
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         stage TEXT NOT NULL,
         match_id TEXT NOT NULL,
-        data TEXT NOT NULL,
+        data JSONB NOT NULL,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT unique_user_stage_match UNIQUE(user_id, stage, match_id)
       );
 
       CREATE TABLE IF NOT EXISTS actual_results (
         stage TEXT PRIMARY KEY,
-        teams TEXT NOT NULL,
+        teams JSONB NOT NULL,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
@@ -137,7 +137,7 @@ app.post('/api/predictions/bulk', async (req, res) => {
 app.get('/api/predictions/:userId', async (req, res) => {
   try {
     const result = await pool.query('SELECT stage, match_id, data FROM predictions WHERE user_id = $1', [req.params.userId]);
-    res.json(result.rows.map(r => ({ stage: r.stage, match_id: r.match_id, data: JSON.parse(r.data) })));
+    res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -146,7 +146,6 @@ app.post('/api/admin/results', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   const { stage, teams } = req.body;
 
-  // Exactly whitelisting 'groups' and 'live_groups' so your save updates process smoothly
   const valid = [
     'groups', 'live_groups',
     'r32', 'r16', 'qf', 'sf', 'final', 'champion',
@@ -169,4 +168,111 @@ app.get('/api/admin/results', async (req, res) => {
   try {
     const rows = await pool.query('SELECT stage, teams, updated_at FROM actual_results');
     const result = {};
-    for (
+    for (const r of rows.rows) {
+      // Safe dynamic reading: Handles data whether stored as a string or raw object
+      const parsedTeams = typeof r.teams === 'string' ? JSON.parse(r.teams) : r.teams;
+      result[r.stage] = { teams: parsedTeams, updated_at: r.updated_at };
+    }
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Leaderboard Core Calculations ───────────────────────────────────────────
+app.get('/api/scores', async (req, res) => {
+  try {
+    const usersRes = await pool.query('SELECT id, name FROM users');
+    const predsRes = await pool.query('SELECT user_id, stage, match_id, data FROM predictions');
+    const actualRes = await pool.query('SELECT stage, teams FROM actual_results');
+
+    const users = usersRes.rows;
+    const allPreds = predsRes.rows.map(r => ({
+      ...r,
+      data: typeof r.data === 'string' ? JSON.parse(r.data) : r.data
+    }));
+
+    const actual = {};
+    for (const r of actualRes.rows) {
+      const parsedTeams = typeof r.teams === 'string' ? JSON.parse(r.teams) : r.teams;
+      actual[r.stage] = new Set(Array.isArray(parsedTeams) ? parsedTeams : [parsedTeams]);
+    }
+
+    const scores = users.map(user => {
+      const up = allPreds.filter(p => p.user_id === user.id);
+
+      const calculateScoreForKeys = (r32Key, r16Key, qfKey, sfKey, finalKey, champKey) => {
+        const targetGroupKey = (r32Key.startsWith('live_')) ? 'live_groups' : 'groups';
+        const r32Set = actual[targetGroupKey];
+
+        let groups = 0;
+        if (r32Set) {
+          for (const gp of up.filter(p => p.stage === 'groups')) {
+            if (gp.data?.first && r32Set.has(gp.data.first)) groups++;
+            if (gp.data?.second && r32Set.has(gp.data.second)) groups++;
+          }
+          const tp = up.find(p => p.stage === 'third' && p.match_id === 'selections');
+          if (tp && Array.isArray(tp.data)) {
+            for (const t of tp.data) if (t && r32Set.has(t)) groups++;
+          }
+        }
+
+        const knockoutScore = (stageKey, matchIds, pts) => {
+          const set = actual[stageKey];
+          if (!set) return 0;
+          let s = 0;
+          for (const id of matchIds) {
+            const pick = up.find(p => p.stage === 'knockout' && p.match_id === id);
+            if (pick?.data && set.has(pick.data)) s += pts;
+          }
+          return s;
+        };
+
+        const r16 = knockoutScore(r16Key, R32_MATCH_IDS, 2);
+        const qf = knockoutScore(qfKey, R16_MATCH_IDS, 4);
+        const sf = knockoutScore(sfKey, QF_MATCH_IDS, 8);
+        const final = knockoutScore(finalKey, SF_MATCH_IDS, 16);
+
+        const champSet = actual[champKey];
+        let champion = 0;
+        if (champSet) {
+          const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
+          if (cp?.data && champSet.has(cp.data)) champion = 32;
+        }
+
+        return groups + r16 + qf + sf + final + champion;
+      };
+
+      const liveTotal = calculateScoreForKeys('live_r32', 'live_r16', 'live_qf', 'live_sf', 'live_final', 'live_champion');
+      const officialTotal = calculateScoreForKeys('r32', 'r16', 'qf', 'sf', 'final', 'champion');
+
+      return { 
+        user_id: user.id, 
+        user_name: user.name, 
+        live_total: liveTotal,
+        official_total: officialTotal
+      };
+    });
+
+    scores.sort((a, b) => b.live_total - a.live_total);
+    res.json(scores);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Delete endpoints ─────────────────────────────────────────────────────────
+app.delete('/api/admin/predictions/:userId', async (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  try {
+    await pool.query('DELETE FROM predictions WHERE user_id = $1', [req.params.userId]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/admin/users/:userId', async (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  try {
+    await pool.query('DELETE FROM predictions WHERE user_id = $1', [req.params.userId]);
+    await pool.query('DELETE FROM users WHERE id = $1', [req.params.userId]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.listen(PORT, () => console.log(`Server running smoothly on port ${PORT}`));
