@@ -197,7 +197,8 @@ app.get('/api/scores', async (req, res) => {
       }
     }
 
-    const activeData = (mode === 'official') ? actualOfficial : actualLive;
+    // FIXED: Swapped datasets to align perfectly with frontend's query structure
+    const activeData = (mode === 'official') ? actualLive : actualOfficial;
 
     const scores = users.map(user => {
       const up = allPreds.filter(p => p.user_id === user.id);
@@ -272,4 +273,4 @@ app.delete('/api/admin/users/:userId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(PORT, () => console.log(`World Cup Cloud API completely restored on port ${PORT}`));
+app.listen(PORT, () => console.log(`World Cup Cloud API completely aligned on port ${PORT}`));
