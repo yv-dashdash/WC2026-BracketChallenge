@@ -166,7 +166,13 @@ app.get('/api/scores', async (_req, res) => {
         let s = 0;
         
         const stageMap = {
-          'r16': ['r16_m89', 'r16_m90', 'r16_m91', 'r16_m92', 'r16_m93', 'r16_m94', 'r16_m95', 'r16_m96'],
+          // ADDED ALL 16 MATCH IDs FOR ROUND OF 16
+          'r16': [
+            'r16_m89', 'r16_m90', 'r16_m91', 'r16_m92', 
+            'r16_m93', 'r16_m94', 'r16_m95', 'r16_m96',
+            'r16_m97', 'r16_m98', 'r16_m99', 'r16_m100',
+            'r16_m101', 'r16_m102', 'r16_m103', 'r16_m104'
+          ],
           'qf':  ['qf_01', 'qf_02', 'qf_03', 'qf_04'],
           'sf':  ['sf_01', 'sf_02'],
           'final': ['final']
