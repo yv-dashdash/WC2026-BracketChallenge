@@ -143,11 +143,13 @@ app.get('/api/scores', async (_req, res) => {
         let correctTopTwo = 0;
         let correctThirds = 0;
 
+        // Part A: Compare the top two entries of each group table (1st & 2nd place)
         for (const gp of up.filter(p => p.stage === 'groups')) {
           if (gp.data.first && actual['r32'].has(gp.data.first)) correctTopTwo++;
           if (gp.data.second && actual['r32'].has(gp.data.second)) correctTopTwo++;
         }
 
+        // Part B: Compare the 8 Best 3rd Place Teams chosen by the participant
         const thirdSelectionRow = up.find(p => p.stage === 'third');
         if (thirdSelectionRow && Array.isArray(thirdSelectionRow.data)) {
           thirdSelectionRow.data.forEach(team => {
@@ -158,29 +160,39 @@ app.get('/api/scores', async (_req, res) => {
         groups = correctTopTwo + correctThirds;
       }
 
-      const getQualifyingScore = (stageKey, pts) => {
+      // Helper for knockout stages
+      const getQualifyingScore = (stageKey, pts, maxPts) => {
         if (!actual[stageKey]) return 0;
+        let s = 0;
         
-        const predictedTeamsInKnockout = new Set();
-        const knockoutPicks = up.filter(p => p.stage === 'knockout' || p.match_id.startsWith('r32_') || p.match_id.startsWith('r16_') || p.match_id.startsWith('qf_') || p.match_id.startsWith('sf_') || p.match_id === 'final');
+        const stageMap = {
+          // FIXED: Map R16 points to the 16 Round of 32 match IDs
+          'r16': [
+            'r32_m73', 'r32_m74', 'r32_m75', 'r32_m76',
+            'r32_m77', 'r32_m78', 'r32_m79', 'r32_m80',
+            'r32_m81', 'r32_m82', 'r32_m83', 'r32_m84',
+            'r32_m85', 'r32_m86', 'r32_m87', 'r32_m88'
+          ],
+          'qf':  ['r16_m89', 'r16_m90', 'r16_m91', 'r16_m92', 'r16_m93', 'r16_m94', 'r16_m95', 'r16_m96'],
+          'sf':  ['qf_01', 'qf_02', 'qf_03', 'qf_04'],
+          'final': ['sf_01', 'sf_02']
+        };
+
+        const relevantMatchIds = stageMap[stageKey] || [];
+        // Note: We check both 'knockout' and any stage mapping matches to catch the structural naming difference
+        const picks = up.filter(p => relevantMatchIds.includes(p.match_id));
         
-        for (const pick of knockoutPicks) {
+        for (const pick of picks) {
           const cleanPick = typeof pick.data === 'string' ? pick.data.replace(/^["'\s]+|["'\s]+$/g, '') : pick.data;
-          if (cleanPick) predictedTeamsInKnockout.add(cleanPick);
+          if (cleanPick && actual[stageKey].has(cleanPick)) s += pts;
         }
-
-        let score = 0;
-        predictedTeamsInKnockout.forEach(team => {
-          if (actual[stageKey].has(team)) score += pts;
-        });
-
-        return Math.min(score, 32);
+        return Math.min(s, maxPts);
       };
 
-      const r16 = getQualifyingScore('r16', 2);
-      const qf = getQualifyingScore('qf', 4);
-      const sf = getQualifyingScore('sf', 8);
-      const final = getQualifyingScore('final', 16);
+      const r16 = getQualifyingScore('r16', 2, 32); // 16 matches * 2 pts = max 32
+      const qf = getQualifyingScore('qf', 4, 32);  // 8 matches * 4 pts = max 32
+      const sf = getQualifyingScore('sf', 8, 32);  // 4 matches * 8 pts = max 32
+      const final = getQualifyingScore('final', 16, 32); // 2 matches * 16 pts = max 32
       
       let champion = actual['champion'] ? 0 : null;
       if (actual['champion']) {
@@ -200,139 +212,6 @@ app.get('/api/scores', async (_req, res) => {
 
     scores.sort((a, b) => b.total_points - a.total_points);
     res.json(scores);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// ── EXACT 8-OUTCOME SEMI-FINAL ODDS SIMULATION ENDPOINT ──
-app.get('/api/odds', async (_req, res) => {
-  try {
-    const usersRes = await pool.query('SELECT id, name FROM users');
-    const predsRes = await pool.query('SELECT user_id, stage, match_id, data FROM predictions');
-    const actualRes = await pool.query('SELECT stage, teams FROM actual_results');
-
-    const users = usersRes.rows;
-    const allPreds = predsRes.rows.map(r => ({ ...r, data: JSON.parse(r.data) }));
-    
-    const baselineActual = {};
-    for (const r of actualRes.rows) {
-      const parsedTeams = JSON.parse(r.teams);
-      baselineActual[r.stage] = Array.isArray(parsedTeams) ? parsedTeams : [parsedTeams];
-    }
-
-    const semiFinalists = baselineActual['qf'] ? [...baselineActual['qf']] : [];
-
-    if (semiFinalists.length < 4) {
-      const qfPicks = new Set();
-      allPreds.forEach(p => {
-        if (p.match_id.startsWith('qf_')) {
-          const clean = typeof p.data === 'string' ? p.data.replace(/^["'\s]+|["'\s]+$/g, '') : p.data;
-          if (clean) qfPicks.add(clean);
-        }
-      });
-      while(qfPicks.size < 4) qfPicks.add(`Team ${qfPicks.size + 1}`);
-      semiFinalists.push(...Array.from(qfPicks).slice(0, 4));
-    }
-
-    const sf1_teams = [semiFinalists[0], semiFinalists[1]];
-    const sf2_teams = [semiFinalists[2], semiFinalists[3]];
-
-    const scenarios = [];
-    for (const finalist1 of sf1_teams) {
-      for (const finalist2 of sf2_teams) {
-        const finalMatchTeams = [finalist1, finalist2];
-        for (const champion of finalMatchTeams) {
-          scenarios.push({
-            final: [finalist1, finalist2],
-            champion: [champion]
-          });
-        }
-      }
-    }
-
-    const winCounts = {};
-    users.forEach(u => winCounts[u.id] = 0);
-
-    scenarios.forEach(simulatedActual => {
-      const dynamicActual = {};
-      Object.keys(baselineActual).forEach(k => dynamicActual[k] = new Set(baselineActual[k]));
-      
-      dynamicActual['final'] = new Set(simulatedActual.final);
-      dynamicActual['champion'] = new Set(simulatedActual.champion);
-
-      let highestScore = -1;
-      let winnersOfScenario = [];
-
-      users.forEach(user => {
-        const up = allPreds.filter(p => p.user_id === user.id);
-        let score = 0;
-
-        if (dynamicActual['r32']) {
-          let count = 0;
-          for (const gp of up.filter(p => p.stage === 'groups')) {
-            if (gp.data.first && dynamicActual['r32'].has(gp.data.first)) count++;
-            if (gp.data.second && dynamicActual['r32'].has(gp.data.second)) count++;
-          }
-          const thirdRow = up.find(p => p.stage === 'third');
-          if (thirdRow && Array.isArray(thirdRow.data)) {
-            thirdRow.data.forEach(t => { if (t && dynamicActual['r32'].has(t)) count++; });
-          }
-          score += count;
-        }
-
-        const stagesConfig = [
-          { key: 'r16', pts: 2 },
-          { key: 'qf', pts: 4 },
-          { key: 'sf', pts: 8 },
-          { key: 'final', pts: 16 }
-        ];
-
-        stagesConfig.forEach(stageOpt => {
-          if (!dynamicActual[stageOpt.key]) return;
-          const predictedTeams = new Set();
-          up.filter(p => p.stage === 'knockout' || p.match_id.startsWith('r32_') || p.match_id.startsWith('r16_') || p.match_id.startsWith('qf_') || p.match_id.startsWith('sf_') || p.match_id === 'final')
-            .forEach(pick => {
-              const clean = typeof pick.data === 'string' ? pick.data.replace(/^["'\s]+|["'\s]+$/g, '') : pick.data;
-              if (clean) predictedTeams.add(clean);
-            });
-
-          let stageScore = 0;
-          predictedTeams.forEach(t => { if (dynamicActual[stageOpt.key].has(t)) stageScore += stageOpt.pts; });
-          score += Math.min(stageScore, 32);
-        });
-
-        if (dynamicActual['champion']) {
-          const cp = up.find(p => p.match_id === 'final');
-          const cleanChamp = typeof cp?.data === 'string' ? cp.data.replace(/^["'\s]+|["'\s]+$/g, '') : cp?.data;
-          if (cleanChamp && dynamicActual['champion'].has(cleanChamp)) score += 32;
-        }
-
-        if (score > highestScore) {
-          highestScore = score;
-          winnersOfScenario = [user.id];
-        } else if (score === highestScore) {
-          winnersOfScenario.push(user.id);
-        }
-      });
-
-      winnersOfScenario.forEach(id => {
-        winCounts[id] += 1;
-      });
-    });
-
-    const oddsReport = users.map(u => {
-      const wins = winCounts[u.id] || 0;
-      const rawPct = (wins / scenarios.length) * 100;
-      return {
-        user_id: u.id,
-        user_name: u.name,
-        winning_probability: Math.round(rawPct)
-      };
-    }).sort((a, b) => b.winning_probability - a.winning_probability);
-
-    res.json({
-      outcomes_calculated: scenarios.length,
-      odds: oddsReport
-    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

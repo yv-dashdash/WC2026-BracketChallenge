@@ -5,7 +5,6 @@ import ThirdPlace from './components/ThirdPlace';
 import KnockoutBracket from './components/KnockoutBracket';
 import Leaderboard from './components/Leaderboard';
 import Admin from './components/Admin';
-import OddsView from './components/OddsView'; 
 import { loadPredictions, savePredictions, getUsers } from './api';
 import { GROUP_NAMES, GROUPS, R32_MATCHES, R16_MATCHES, QF_MATCHES, SF_MATCHES } from './data/teams';
 
@@ -51,6 +50,7 @@ function payloadToPreds(rows) {
 }
 
 export default function App() {
+  // null = leaderboard, 'bracket' = editor, 'admin' = admin
   const [view, setView] = useState('leaderboard');
   const [editorTab, setEditorTab] = useState('groups');
   const [user, setUser] = useState(() => {
@@ -58,6 +58,7 @@ export default function App() {
   });
   const [showPicker, setShowPicker] = useState(false);
 
+  // States for viewing other participants' predictions
   const [viewingUser, setViewingUser] = useState(null);
   const [isReadOnly, setIsReadOnly] = useState(false);
 
@@ -70,15 +71,18 @@ export default function App() {
   const saveTimer = useRef(null);
   const dirtyRef = useRef(false);
 
+  // Persist user to localStorage
   useEffect(() => {
     if (user) localStorage.setItem('wc2026_user', JSON.stringify(user));
     else localStorage.removeItem('wc2026_user');
   }, [user]);
 
+  // Fetch participant count for pot display
   useEffect(() => {
     getUsers().then(users => setParticipantCount(users.length)).catch(() => {});
-  }, [view]);
+  }, [view]); // refresh when returning to leaderboard
 
+  // Load predictions when user OR inspected user changes
   useEffect(() => {
     const targetUserId = viewingUser ? viewingUser.id : user?.id;
     if (!targetUserId) return;
@@ -92,6 +96,7 @@ export default function App() {
     });
   }, [user, viewingUser]);
 
+  // Auto-save (debounced) - Only active if NOT in read-only mode
   const triggerSave = useCallback(() => {
     if (!user || !dirtyRef.current || isReadOnly) return;
     clearTimeout(saveTimer.current);
@@ -138,6 +143,7 @@ export default function App() {
     }
   };
 
+  // Click handler to open someone else's bracket from Leaderboard
   const handleSelectUser = (selectedUser) => {
     setViewingUser(selectedUser);
     setIsReadOnly(true);
@@ -151,6 +157,7 @@ export default function App() {
     setView('leaderboard');
   };
 
+  // ── Random fill helpers ──────────────────────────────────────────────────────
   const shuffle = arr => {
     const a = [...arr];
     for (let i = a.length - 1; i > 0; i--) {
@@ -251,13 +258,6 @@ export default function App() {
                   {user.name}
                 </div>
               )}
-              <button 
-                className="btn-my-bracket" 
-                style={{ borderColor: '#ffd700', color: '#ffd700' }} 
-                onClick={() => setView('odds')}
-              >
-                📊 Odds
-              </button>
               <button className="btn-my-bracket" onClick={openEditor}>
                 {user ? 'My Bracket' : 'Enter Bracket'}
               </button>
@@ -270,7 +270,12 @@ export default function App() {
               </button>
             </>
           )}
-          {view !== 'leaderboard' && (
+          {view === 'bracket' && (
+            <button className="btn-back" onClick={handleBackToLeaderboard}>
+              ← Leaderboard
+            </button>
+          )}
+          {view === 'admin' && (
             <button className="btn-back" onClick={handleBackToLeaderboard}>
               ← Leaderboard
             </button>
@@ -287,6 +292,7 @@ export default function App() {
             </div>
 
             <div className="info-banner">
+              {/* Pot + prizes */}
               <div className="info-grid">
                 <div className="info-pot-card">
                   <div className="info-pot-label">Total Pot</div>
@@ -317,6 +323,7 @@ export default function App() {
 
               <div className="info-divider" />
 
+              {/* Scoring */}
               <div className="info-banner-row">
                 <span className="info-icon">📊</span>
                 <div>
@@ -335,6 +342,7 @@ export default function App() {
 
               <div className="info-divider" />
 
+              {/* Deadline */}
               <div className="info-banner-row">
                 <span className="info-icon">⏰</span>
                 <span>
@@ -342,6 +350,7 @@ export default function App() {
                 </span>
               </div>
 
+              {/* How to submit */}
               <div className="info-banner-row">
                 <span className="info-icon">📝</span>
                 <span>
@@ -352,6 +361,7 @@ export default function App() {
                 </span>
               </div>
 
+              {/* Payment */}
               <div className="info-banner-row">
                 <span className="info-icon">💳</span>
                 <span>
@@ -360,11 +370,9 @@ export default function App() {
               </div>
             </div>
 
-            <Leaderboard currentUser={user} onSelectUser={handleSelectUser}/>
+            <Leaderboard currentUser={user} onSelectUser={handleSelectUser} />
           </div>
         )}
-
-        {view === 'odds' && <OddsView/>}
 
         {view === 'bracket' && (
           <>
@@ -407,18 +415,36 @@ export default function App() {
             </div>
 
             {editorTab === 'groups' && (
-              <GroupStage groupPredictions={groupPredictions} isReadOnly={isReadOnly} onChange={handleGroupChange} onRandom={randomizeGroups}/>
+              <GroupStage 
+                groupPredictions={groupPredictions} 
+                onChange={handleGroupChange} 
+                onRandom={randomizeGroups} 
+                isReadOnly={isReadOnly}
+              />
             )}
             {editorTab === 'third' && (
-              <ThirdPlace groupPredictions={groupPredictions} isReadOnly={isReadOnly} onChange={handleThirdChange} onRandom={randomizeThird} thirdSelections={thirdSelections}/>
+              <ThirdPlace
+                groupPredictions={groupPredictions}
+                thirdSelections={thirdSelections}
+                onChange={handleThirdChange}
+                onRandom={randomizeThird}
+                isReadOnly={isReadOnly}
+              />
             )}
             {editorTab === 'bracket' && (
-              <KnockoutBracket groupPredictions={groupPredictions} isReadOnly={isReadOnly} knockoutPicks={knockoutPicks} onPick={handleKnockoutPick} onRandom={randomizeBracket} thirdSelections={thirdSelections}/>
+              <KnockoutBracket
+                groupPredictions={groupPredictions}
+                thirdSelections={thirdSelections}
+                knockoutPicks={knockoutPicks}
+                onPick={handleKnockoutPick}
+                onRandom={randomizeBracket}
+                isReadOnly={isReadOnly}
+              />
             )}
           </>
         )}
 
-        {view === 'admin' && <Admin/>}
+        {view === 'admin' && <Admin />}
       </main>
 
       {saveStatus !== 'idle' && view === 'bracket' && !isReadOnly && (
@@ -430,7 +456,7 @@ export default function App() {
       )}
 
       {showPicker && (
-        <NamePicker onClose={() => setShowPicker(false)} onSelect={handlePickerSelect} />
+        <NamePicker onSelect={handlePickerSelect} onClose={() => setShowPicker(false)} />
       )}
 
       {showConfirm && !isReadOnly && (() => {
