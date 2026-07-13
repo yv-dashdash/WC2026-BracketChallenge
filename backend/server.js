@@ -29,8 +29,6 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-const ADMIN_PASSWORD = 'SoftIsBeautiful2026';
-
 // ── API Endpoints ──
 
 app.get('/api/scores', async (_req, res) => {
@@ -40,12 +38,11 @@ app.get('/api/scores', async (_req, res) => {
     const actualRes = await pool.query('SELECT stage, teams FROM actual_results');
 
     const users = usersRes.rows;
-    // Safely parse prediction data
     const allPreds = predsRes.rows.map(r => {
       let parsedData = r.data;
       try {
         parsedData = typeof r.data === 'string' ? JSON.parse(r.data) : r.data;
-      } catch (e) { /* keep as is */ }
+      } catch (e) { }
       return { ...r, data: parsedData };
     });
     
@@ -58,19 +55,22 @@ app.get('/api/scores', async (_req, res) => {
     const scores = users.map(user => {
       const up = allPreds.filter(p => p.user_id === user.id);
 
-      // Fixed: Target 'r32' key instead of 'groups'
+      // 1. Updated Groups Calculation: Iterates through all 4 positions
       let groups = actual['r32'] ? 0 : null;
       if (actual['r32']) {
         for (const gp of up.filter(p => p.stage === 'groups')) {
           const d = gp.data;
-          const first = d?.first ? String(d.first).replace(/^["'\s]+|["'\s]+$/g, '') : null;
-          const second = d?.second ? String(d.second).replace(/^["'\s]+|["'\s]+$/g, '') : null;
-          
-          if (first && actual['r32'].has(first)) groups++;
-          if (second && actual['r32'].has(second)) groups++;
+          const positions = ['first', 'second', 'third', 'fourth'];
+          positions.forEach(pos => {
+            if (d && d[pos]) {
+              const team = String(d[pos]).replace(/^["'\s]+|["'\s]+$/g, '');
+              if (actual['r32'].has(team)) groups++;
+            }
+          });
         }
       }
 
+      // 2. Knockout Calculation
       const getQualifyingScore = (stageKey, pts) => {
         if (!actual[stageKey]) return 0;
         let s = 0;
@@ -116,7 +116,5 @@ app.get('/api/scores', async (_req, res) => {
     res.json(scores);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
-// ... (keep all other existing endpoints for users, predictions, and admin)
 
 app.listen(PORT, () => console.log(`World Cup Cloud API running on port ${PORT}`));
