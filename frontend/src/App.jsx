@@ -360,7 +360,7 @@ export default function App() {
               </div>
             </div>
 
-            <Leaderboard currentUser="{user}" onSelectUser="{handleSelectUser}"/>
+            <Leaderboard currentUser={user} onSelectUser={handleSelectUser}/>
           </div>
         )}
 
@@ -407,13 +407,13 @@ export default function App() {
             </div>
 
             {editorTab === 'groups' && (
-              <GroupStage groupPredictions="{groupPredictions}" isReadOnly="{isReadOnly}" onChange="{handleGroupChange}" onRandom="{randomizeGroups}"/>
+              <GroupStage groupPredictions={groupPredictions} isReadOnly={isReadOnly} onChange={handleGroupChange} onRandom={randomizeGroups}/>
             )}
             {editorTab === 'third' && (
-              <ThirdPlace groupPredictions="{groupPredictions}" isReadOnly="{isReadOnly}" onChange="{handleThirdChange}" onRandom="{randomizeThird}" thirdSelections="{thirdSelections}"/>
+              <ThirdPlace groupPredictions={groupPredictions} isReadOnly={isReadOnly} onChange={handleThirdChange} onRandom={randomizeThird} thirdSelections={thirdSelections}/>
             )}
             {editorTab === 'bracket' && (
-              <KnockoutBracket groupPredictions="{groupPredictions}" isReadOnly="{isReadOnly}" knockoutPicks="{knockoutPicks}" onPick="{handleKnockoutPick}" onRandom="{randomizeBracket}" thirdSelections="{thirdSelections}"/>
+              <KnockoutBracket groupPredictions={groupPredictions} isReadOnly={isReadOnly} knockoutPicks={knockoutPicks} onPick={handleKnockoutPick} onRandom={randomizeBracket} thirdSelections={thirdSelections}/>
             )}
           </>
         )}
@@ -430,7 +430,7 @@ export default function App() {
       )}
 
       {showPicker && (
-        <NamePicker onClose="{()" onSelect="{handlePickerSelect}"> setShowPicker(false)} />
+        <NamePicker onClose={() => setShowPicker(false)} onSelect={handlePickerSelect} />
       )}
 
       {showConfirm && !isReadOnly && (() => {
