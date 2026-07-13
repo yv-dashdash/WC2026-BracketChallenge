@@ -138,20 +138,29 @@ app.get('/api/scores', async (_req, res) => {
     const scores = users.map(user => {
       const up = allPreds.filter(p => p.user_id === user.id);
 
-      // 1. Group Stage: 1 pt per correct team (capped at 32)
       let groups = actual['r32'] ? 0 : null;
       if (actual['r32']) {
-        let count = 0;
+        let correctTopTwo = 0;
+        let correctThirds = 0;
+
+        // Part A: Compare the top two entries of each group table (1st & 2nd place)
         for (const gp of up.filter(p => p.stage === 'groups')) {
-          ['first', 'second', 'third', 'fourth'].forEach(pos => {
-            const team = gp.data[pos];
-            if (team && actual['r32'].has(team)) count++;
+          if (gp.data.first && actual['r32'].has(gp.data.first)) correctTopTwo++;
+          if (gp.data.second && actual['r32'].has(gp.data.second)) correctTopTwo++;
+        }
+
+        // Part B: Compare the 8 Best 3rd Place Teams chosen by the participant
+        const thirdSelectionRow = up.find(p => p.stage === 'third');
+        if (thirdSelectionRow && Array.isArray(thirdSelectionRow.data)) {
+          thirdSelectionRow.data.forEach(team => {
+            if (team && actual['r32'].has(team)) correctThirds++;
           });
         }
-        groups = Math.min(count, 32);
+
+        groups = correctTopTwo + correctThirds;
       }
 
-      // Helper for knockout stages (capped at 32)
+      // Helper for knockout stages (capped at 32 per stage)
       const getQualifyingScore = (stageKey, pts) => {
         if (!actual[stageKey]) return 0;
         let s = 0;
