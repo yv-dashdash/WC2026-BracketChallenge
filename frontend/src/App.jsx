@@ -5,6 +5,7 @@ import ThirdPlace from './components/ThirdPlace';
 import KnockoutBracket from './components/KnockoutBracket';
 import Leaderboard from './components/Leaderboard';
 import Admin from './components/Admin';
+import OddsView from './components/OddsView'; // <-- Imported Odds Component
 import { loadPredictions, savePredictions, getUsers } from './api';
 import { GROUP_NAMES, GROUPS, R32_MATCHES, R16_MATCHES, QF_MATCHES, SF_MATCHES } from './data/teams';
 
@@ -50,7 +51,7 @@ function payloadToPreds(rows) {
 }
 
 export default function App() {
-  // null = leaderboard, 'bracket' = editor, 'admin' = admin
+  // 'leaderboard' = home, 'bracket' = editor, 'admin' = admin console, 'odds' = simulation odds view[cite: 1]
   const [view, setView] = useState('leaderboard');
   const [editorTab, setEditorTab] = useState('groups');
   const [user, setUser] = useState(() => {
@@ -258,6 +259,14 @@ export default function App() {
                   {user.name}
                 </div>
               )}
+              {/* Added Yellow Accent Odds Button Placement Line */}
+              <button 
+                className="btn-my-bracket" 
+                style={{ borderColor: '#ffd700', color: '#ffd700' }} 
+                onClick={() => setView('odds')}
+              >
+                📊 Odds
+              </button>
               <button className="btn-my-bracket" onClick={openEditor}>
                 {user ? 'My Bracket' : 'Enter Bracket'}
               </button>
@@ -270,12 +279,7 @@ export default function App() {
               </button>
             </>
           )}
-          {view === 'bracket' && (
-            <button className="btn-back" onClick={handleBackToLeaderboard}>
-              ← Leaderboard
-            </button>
-          )}
-          {view === 'admin' && (
+          {view !== 'leaderboard' && (
             <button className="btn-back" onClick={handleBackToLeaderboard}>
               ← Leaderboard
             </button>
@@ -373,6 +377,9 @@ export default function App() {
             <Leaderboard currentUser={user} onSelectUser={handleSelectUser} />
           </div>
         )}
+
+        {/* View Router Toggle Integration Layer[cite: 1] */}
+        {view === 'odds' && <OddsView />}
 
         {view === 'bracket' && (
           <>
@@ -531,3 +538,4 @@ function clearDownstream(matchId, picks) {
   }
   return next;
 }
+``` Standalone complete codeset delivery is finished.
