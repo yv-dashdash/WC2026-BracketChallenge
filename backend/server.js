@@ -146,7 +146,7 @@ app.get('/api/scores', async (_req, res) => {
         }
       }
 
-      // Updated scoring logic mapping specific match IDs to stages
+      // Updated scoring logic with data cleaning to handle double-quotes
       const getQualifyingScore = (stageKey, pts) => {
         if (!actual[stageKey]) return 0;
         let s = 0;
@@ -162,7 +162,12 @@ app.get('/api/scores', async (_req, res) => {
         const picks = up.filter(p => p.stage === 'knockout' && relevantMatchIds.includes(p.match_id));
         
         for (const pick of picks) {
-          if (pick.data && actual[stageKey].has(pick.data)) s += pts;
+          // Clean the prediction string: remove extra quotes and whitespace
+          const cleanPick = typeof pick.data === 'string' 
+            ? pick.data.replace(/^["'\s]+|["'\s]+$/g, '') 
+            : pick.data;
+
+          if (cleanPick && actual[stageKey].has(cleanPick)) s += pts;
         }
         return s;
       };
@@ -175,7 +180,10 @@ app.get('/api/scores', async (_req, res) => {
       let champion = actual['champion'] ? 0 : null;
       if (actual['champion']) {
         const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
-        if (cp?.data && actual['champion'].has(cp.data)) champion = 32;
+        const cleanChampion = typeof cp?.data === 'string' 
+          ? cp.data.replace(/^["'\s]+|["'\s]+$/g, '') 
+          : cp?.data;
+        if (cleanChampion && actual['champion'].has(cleanChampion)) champion = 32;
       }
 
       const total = [groups, r16, qf, sf, final, champion].reduce((s, v) => s + (v ?? 0), 0);
