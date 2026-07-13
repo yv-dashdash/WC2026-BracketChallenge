@@ -146,10 +146,21 @@ app.get('/api/scores', async (_req, res) => {
         }
       }
 
+      // Updated scoring logic mapping specific match IDs to stages
       const getQualifyingScore = (stageKey, pts) => {
         if (!actual[stageKey]) return 0;
         let s = 0;
-        const picks = up.filter(p => p.stage === 'knockout' && p.match_id === stageKey);
+        
+        const stageMap = {
+          'r16': ['r16_m89', 'r16_m90', 'r16_m91', 'r16_m92', 'r16_m93', 'r16_m94', 'r16_m95', 'r16_m96'],
+          'qf':  ['qf_01', 'qf_02', 'qf_03', 'qf_04'],
+          'sf':  ['sf_01', 'sf_02'],
+          'final': ['final']
+        };
+
+        const relevantMatchIds = stageMap[stageKey] || [];
+        const picks = up.filter(p => p.stage === 'knockout' && relevantMatchIds.includes(p.match_id));
+        
         for (const pick of picks) {
           if (pick.data && actual[stageKey].has(pick.data)) s += pts;
         }
