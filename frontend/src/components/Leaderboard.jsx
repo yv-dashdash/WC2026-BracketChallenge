@@ -7,58 +7,38 @@ export default function Leaderboard({ currentUser, onSelectUser }) {
 
   useEffect(() => {
     getScores()
-      .then(data => {
-        setScores(data);
-        setLoading(false);
-      })
+      .then(data => { setScores(data); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
 
-  if (loading) return <div className="leaderboard-loading">Loading standings...</div>;
+  if (loading) return <div>Loading...</div>;
+  const totalPot = scores.length > 0 ? scores[0].pot : 0;
 
   return (
     <div className="leaderboard-card">
+      <h3>Total Pot: {totalPot} CHF</h3>
       <table className="leaderboard-table">
         <thead>
           <tr>
-            <th className="col-rank">#</th>
-            <th className="col-name">Participant</th>
-            <th>Groups</th>
-            <th>R16</th>
-            <th>QF</th>
-            <th>SF</th>
-            <th>Final</th>
-            <th>Champ</th>
-            <th className="col-score">Total</th>
+            <th>#</th><th>Participant</th><th>Grps</th><th>R16</th><th>QF</th><th>SF</th><th>Fin</th><th>Chmp</th><th>Total</th>
           </tr>
         </thead>
         <tbody>
-          {scores.map((row, i) => {
-            const isMe = currentUser && row.user_id === currentUser.id;
-            // Safely access breakdown, default to 0 if missing
-            const b = row.breakdown || {}; 
-            return (
-              <tr key={row.user_id} className={isMe ? 'row-me' : ''}>
-                <td className="col-rank">{i + 1}</td>
-                <td className="col-name">
-                  <span 
-                    className="leaderboard-name-link"
-                    onClick={() => onSelectUser({ id: row.user_id, name: row.user_name })}
-                    style={{ cursor: 'pointer', fontWeight: isMe ? '800' : '500', textDecoration: 'underline' }}
-                  >
-                    {row.user_name}
-                  </span>
-                </td>
-                <td>{b.groups ?? 0}</td>
-                <td>{b.r16 ?? 0}</td>
-                <td>{b.qf ?? 0}</td>
-                <td>{b.sf ?? 0}</td>
-                <td>{b.final ?? 0}</td>
-                <td>{b.champion ?? 0}</td>
-                <td className="col-score" style={{ fontWeight: 'bold' }}>{row.total_points || 0}</td>
-              </tr>
-            );
-          })}
+          {scores.map((row, i) => (
+            <tr key={row.user_id} className={currentUser?.id === row.user_id ? 'row-me' : ''}>
+              <td>{i + 1}</td>
+              <td onClick={() => onSelectUser({id: row.user_id, name: row.user_name})} style={{cursor:'pointer', textDecoration:'underline'}}>
+                {row.user_name}
+              </td>
+              <td>{row.breakdown.groups}</td>
+              <td>{row.breakdown.r16}</td>
+              <td>{row.breakdown.qf}</td>
+              <td>{row.breakdown.sf}</td>
+              <td>{row.breakdown.final}</td>
+              <td>{row.breakdown.champion}</td>
+              <td style={{fontWeight:'bold'}}>{row.total_points}</td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>

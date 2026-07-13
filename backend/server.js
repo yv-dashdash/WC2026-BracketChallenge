@@ -3,33 +3,13 @@ const cors = require('cors');
 const { Pool } = require('pg');
 
 const app = express();
-const PORT = process.env.PORT || 3001;
-
-// ── Production CORS Configuration ──
-const allowedOrigins = [
-  'http://localhost:5173',
-  'https://wc-2026-bracket-challenge.vercel.app'
-];
-
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  }
-}));
-
+app.use(cors());
 app.use(express.json());
 
-// ── Database Connection ──
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
-
-// ── API Endpoints ──
 
 app.get('/api/scores', async (_req, res) => {
   try {
@@ -38,83 +18,67 @@ app.get('/api/scores', async (_req, res) => {
     const actualRes = await pool.query('SELECT stage, teams FROM actual_results');
 
     const users = usersRes.rows;
+    const pot = users.length * 5; // 12 users * 5 CHF = 60 CHF[cite: 1]
+
     const allPreds = predsRes.rows.map(r => {
-      let parsedData = r.data;
-      try {
-        parsedData = typeof r.data === 'string' ? JSON.parse(r.data) : r.data;
-      } catch (e) { }
-      return { ...r, data: parsedData };
+      let data = r.data;
+      try { data = typeof r.data === 'string' ? JSON.parse(r.data) : r.data; } catch (e) {}
+      return { ...r, data };
     });
     
     const actual = {};
     for (const r of actualRes.rows) {
-      const parsedTeams = JSON.parse(r.teams);
-      actual[r.stage] = new Set(Array.isArray(parsedTeams) ? parsedTeams : [parsedTeams]);
+      const teams = JSON.parse(r.teams);
+      actual[r.stage] = new Set(Array.isArray(teams) ? teams : [teams]);
     }
 
     const scores = users.map(user => {
       const up = allPreds.filter(p => p.user_id === user.id);
 
-      // 1. Updated Groups Calculation: Iterates through all 4 positions
-      let groups = actual['r32'] ? 0 : null;
+      // Groups: 1pt per correct team, max 32[cite: 1]
+      let groups = 0;
       if (actual['r32']) {
-        for (const gp of up.filter(p => p.stage === 'groups')) {
-          const d = gp.data;
-          const positions = ['first', 'second', 'third', 'fourth'];
-          positions.forEach(pos => {
-            if (d && d[pos]) {
-              const team = String(d[pos]).replace(/^["'\s]+|["'\s]+$/g, '');
+        up.filter(p => p.stage === 'groups').forEach(gp => {
+          ['first', 'second', 'third', 'fourth'].forEach(pos => {
+            if (gp.data?.[pos]) {
+              const team = String(gp.data[pos]).replace(/^["'\s]+|["'\s]+$/g, '');
               if (actual['r32'].has(team)) groups++;
             }
           });
-        }
+        });
+        groups = Math.min(groups, 32);
       }
 
-      // 2. Knockout Calculation
-      const getQualifyingScore = (stageKey, pts) => {
-        if (!actual[stageKey]) return 0;
+      // Knockout Scoring Logic[cite: 1]
+      const getKnockoutScore = (stage, pts) => {
+        if (!actual[stage]) return 0;
+        const matches = up.filter(p => p.stage === 'knockout' && p.data);
         let s = 0;
-        const stageMap = {
-          'r16': ['r16_m89', 'r16_m90', 'r16_m91', 'r16_m92', 'r16_m93', 'r16_m94', 'r16_m95', 'r16_m96'],
-          'qf':  ['qf_01', 'qf_02', 'qf_03', 'qf_04'],
-          'sf':  ['sf_01', 'sf_02'],
-          'final': ['final']
-        };
-
-        const relevantMatchIds = stageMap[stageKey] || [];
-        const picks = up.filter(p => p.stage === 'knockout' && relevantMatchIds.includes(p.match_id));
-        
-        for (const pick of picks) {
-          let cleanPick = String(pick.data).replace(/^["'\s]+|["'\s]+$/g, '');
-          if (actual[stageKey].has(cleanPick)) s += pts;
-        }
-        return s;
+        matches.forEach(m => {
+          const team = String(m.data).replace(/^["'\s]+|["'\s]+$/g, '');
+          if (actual[stage].has(team)) s += pts;
+        });
+        return Math.min(s, 32);
       };
 
-      const r16 = getQualifyingScore('r16', 2);
-      const qf = getQualifyingScore('qf', 4);
-      const sf = getQualifyingScore('sf', 8);
-      const final = getQualifyingScore('final', 16);
+      const r16 = getKnockoutScore('r16', 2);
+      const qf = getKnockoutScore('qf', 4);
+      const sf = getKnockoutScore('sf', 8);
+      const final = getKnockoutScore('final', 16);
       
-      let champion = actual['champion'] ? 0 : null;
+      let champion = 0;
       if (actual['champion']) {
         const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
-        const cleanChampion = cp?.data ? String(cp.data).replace(/^["'\s]+|["'\s]+$/g, '') : null;
-        if (cleanChampion && actual['champion'].has(cleanChampion)) champion = 32;
+        const team = cp?.data ? String(cp.data).replace(/^["'\s]+|["'\s]+$/g, '') : null;
+        if (team && actual['champion'].has(team)) champion = 32;
       }
 
-      const total = [groups, r16, qf, sf, final, champion].reduce((s, v) => s + (v ?? 0), 0);
-      return { 
-        user_id: user.id, 
-        user_name: user.name, 
-        total_points: total, 
-        breakdown: { groups: groups ?? 0, r16, qf, sf, final, champion } 
-      };
+      const total = groups + r16 + qf + sf + final + champion;
+      return { user_id: user.id, user_name: user.name, total_points: total, pot, breakdown: { groups, r16, qf, sf, final, champion } };
     });
 
-    scores.sort((a, b) => b.total_points - a.total_points);
-    res.json(scores);
+    res.json(scores.sort((a, b) => b.total_points - a.total_points));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(PORT, () => console.log(`World Cup Cloud API running on port ${PORT}`));
+app.listen(process.env.PORT || 3001);
