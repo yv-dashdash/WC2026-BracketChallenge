@@ -15,8 +15,7 @@ export default function Leaderboard({ currentUser, onSelectUser }) {
   const totalPot = scores.length > 0 ? scores[0].pot : 0;
 
   return (
-    <div className="leaderboard-card">
-      <h3>Total Pot: {totalPot} CHF</h3>
+    <div className="leaderboard-card">      
       <table className="leaderboard-table">
         <thead>
           <tr>
