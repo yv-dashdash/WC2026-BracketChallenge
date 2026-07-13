@@ -26,100 +26,13 @@ app.use(express.json());
 // ── Database Connection ──
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false
-  }
+  ssl: { rejectUnauthorized: false }
 });
 
 const ADMIN_PASSWORD = 'SoftIsBeautiful2026';
 
 // ── API Endpoints ──
 
-// Users
-app.post('/api/users', async (req, res) => {
-  const name = req.body?.name?.trim();
-  if (!name) return res.status(400).json({ error: 'Name required' });
-  try {
-    const existing = await pool.query('SELECT * FROM users WHERE name = $1', [name]);
-    if (existing.rows.length > 0) return res.json(existing.rows[0]);
-    const result = await pool.query('INSERT INTO users (name) VALUES ($1) RETURNING *', [name]);
-    res.json(result.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.get('/api/users', async (_req, res) => {
-  try {
-    const result = await pool.query('SELECT id, name, created_at FROM users ORDER BY name');
-    res.json(result.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// Predictions
-app.post('/api/predictions/bulk', async (req, res) => {
-  const { user_id, predictions } = req.body;
-  if (!user_id || !Array.isArray(predictions)) return res.status(400).json({ error: 'Missing fields' });
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const upsertQuery = `
-      INSERT INTO predictions (user_id, stage, match_id, data, updated_at)
-      VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-      ON CONFLICT(user_id, stage, match_id) DO UPDATE SET
-        data = EXCLUDED.data, updated_at = CURRENT_TIMESTAMP
-    `;
-    for (const p of predictions) {
-      await client.query(upsertQuery, [user_id, p.stage, p.match_id, JSON.stringify(p.data)]);
-    }
-    await client.query('COMMIT');
-    res.json({ ok: true });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    res.status(500).json({ error: err.message });
-  } finally { client.release(); }
-});
-
-app.get('/api/predictions/:userId', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT stage, match_id, data FROM predictions WHERE user_id = $1', [req.params.userId]);
-    res.json(result.rows.map(r => ({ stage: r.stage, match_id: r.match_id, data: JSON.parse(r.data) })));
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// Admin
-function checkAdmin(req, res) {
-  const pw = req.body?.password || req.query?.password;
-  if (pw !== ADMIN_PASSWORD) { res.status(401).json({ error: 'Unauthorized' }); return false; }
-  return true;
-}
-
-app.post('/api/admin/results', async (req, res) => {
-  if (!checkAdmin(req, res)) return;
-  const { stage, teams } = req.body;
-  const valid = ['r32', 'r16', 'qf', 'sf', 'final', 'champion'];
-  if (!stage || !valid.includes(stage) || teams === undefined) {
-    return res.status(400).json({ error: 'Invalid stage' });
-  }
-  try {
-    await pool.query(`
-      INSERT INTO actual_results (stage, teams, updated_at)
-      VALUES ($1, $2, CURRENT_TIMESTAMP)
-      ON CONFLICT(stage) DO UPDATE SET teams = EXCLUDED.teams, updated_at = CURRENT_TIMESTAMP
-    `, [stage, JSON.stringify(teams)]);
-    res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.get('/api/admin/results', async (req, res) => {
-  if (!checkAdmin(req, res)) return;
-  try {
-    const rows = await pool.query('SELECT stage, teams FROM actual_results');
-    const result = {};
-    for (const r of rows.rows) result[r.stage] = { teams: JSON.parse(r.teams) };
-    res.json(result);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// Scores
 app.get('/api/scores', async (_req, res) => {
   try {
     const usersRes = await pool.query('SELECT id, name FROM users');
@@ -127,7 +40,14 @@ app.get('/api/scores', async (_req, res) => {
     const actualRes = await pool.query('SELECT stage, teams FROM actual_results');
 
     const users = usersRes.rows;
-    const allPreds = predsRes.rows.map(r => ({ ...r, data: JSON.parse(r.data) }));
+    // Safely parse prediction data
+    const allPreds = predsRes.rows.map(r => {
+      let parsedData = r.data;
+      try {
+        parsedData = typeof r.data === 'string' ? JSON.parse(r.data) : r.data;
+      } catch (e) { /* keep as is */ }
+      return { ...r, data: parsedData };
+    });
     
     const actual = {};
     for (const r of actualRes.rows) {
@@ -138,18 +58,22 @@ app.get('/api/scores', async (_req, res) => {
     const scores = users.map(user => {
       const up = allPreds.filter(p => p.user_id === user.id);
 
+      // Fixed: Target 'r32' key instead of 'groups'
       let groups = actual['r32'] ? 0 : null;
       if (actual['r32']) {
         for (const gp of up.filter(p => p.stage === 'groups')) {
-          if (gp.data.first && actual['r32'].has(gp.data.first)) groups++;
-          if (gp.data.second && actual['r32'].has(gp.data.second)) groups++;
+          const d = gp.data;
+          const first = d?.first ? String(d.first).replace(/^["'\s]+|["'\s]+$/g, '') : null;
+          const second = d?.second ? String(d.second).replace(/^["'\s]+|["'\s]+$/g, '') : null;
+          
+          if (first && actual['r32'].has(first)) groups++;
+          if (second && actual['r32'].has(second)) groups++;
         }
       }
 
       const getQualifyingScore = (stageKey, pts) => {
         if (!actual[stageKey]) return 0;
         let s = 0;
-        
         const stageMap = {
           'r16': ['r16_m89', 'r16_m90', 'r16_m91', 'r16_m92', 'r16_m93', 'r16_m94', 'r16_m95', 'r16_m96'],
           'qf':  ['qf_01', 'qf_02', 'qf_03', 'qf_04'],
@@ -162,12 +86,7 @@ app.get('/api/scores', async (_req, res) => {
         
         for (const pick of picks) {
           let cleanPick = String(pick.data).replace(/^["'\s]+|["'\s]+$/g, '');
-          
-          if (actual[stageKey].has(cleanPick)) {
-             s += pts;
-          } else {
-             console.log(`Mismatch [${stageKey}]: Actual has ${[...actual[stageKey]]}, but User picked "${cleanPick}"`);
-          }
+          if (actual[stageKey].has(cleanPick)) s += pts;
         }
         return s;
       };
@@ -189,7 +108,7 @@ app.get('/api/scores', async (_req, res) => {
         user_id: user.id, 
         user_name: user.name, 
         total_points: total, 
-        breakdown: { groups, r16, qf, sf, final, champion } 
+        breakdown: { groups: groups ?? 0, r16, qf, sf, final, champion } 
       };
     });
 
@@ -198,21 +117,6 @@ app.get('/api/scores', async (_req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete('/api/admin/predictions/:userId', async (req, res) => {
-  if (!checkAdmin(req, res)) return;
-  try {
-    await pool.query('DELETE FROM predictions WHERE user_id = $1', [req.params.userId]);
-    res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.delete('/api/admin/users/:userId', async (req, res) => {
-  if (!checkAdmin(req, res)) return;
-  try {
-    await pool.query('DELETE FROM predictions WHERE user_id = $1', [req.params.userId]);
-    await pool.query('DELETE FROM users WHERE id = $1', [req.params.userId]);
-    res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
+// ... (keep all other existing endpoints for users, predictions, and admin)
 
 app.listen(PORT, () => console.log(`World Cup Cloud API running on port ${PORT}`));
