@@ -23,12 +23,20 @@ export default function Leaderboard({ currentUser, onSelectUser }) {
           <tr>
             <th className="col-rank">#</th>
             <th className="col-name">Participant</th>
-            <th className="col-score">Pts</th>
+            <th>Groups</th>
+            <th>R16</th>
+            <th>QF</th>
+            <th>SF</th>
+            <th>Final</th>
+            <th>Champ</th>
+            <th className="col-score">Total</th>
           </tr>
         </thead>
         <tbody>
           {scores.map((row, i) => {
             const isMe = currentUser && row.user_id === currentUser.id;
+            // Safely access breakdown, default to 0 if missing
+            const b = row.breakdown || {}; 
             return (
               <tr key={row.user_id} className={isMe ? 'row-me' : ''}>
                 <td className="col-rank">{i + 1}</td>
@@ -36,28 +44,21 @@ export default function Leaderboard({ currentUser, onSelectUser }) {
                   <span 
                     className="leaderboard-name-link"
                     onClick={() => onSelectUser({ id: row.user_id, name: row.user_name })}
-                    style={{ 
-                      cursor: 'pointer', 
-                      fontWeight: isMe ? '800' : '500',
-                      textDecoration: 'underline',
-                      textDecorationColor: 'rgba(255,255,255,0.2)'
-                    }}
+                    style={{ cursor: 'pointer', fontWeight: isMe ? '800' : '500', textDecoration: 'underline' }}
                   >
                     {row.user_name}
                   </span>
-                  {isMe && <span className="me-badge">YOU</span>}
                 </td>
-                <td className="col-score">{row.total_points || 0}</td>
+                <td>{b.groups ?? 0}</td>
+                <td>{b.r16 ?? 0}</td>
+                <td>{b.qf ?? 0}</td>
+                <td>{b.sf ?? 0}</td>
+                <td>{b.final ?? 0}</td>
+                <td>{b.champion ?? 0}</td>
+                <td className="col-score" style={{ fontWeight: 'bold' }}>{row.total_points || 0}</td>
               </tr>
             );
           })}
-          {scores.length === 0 && (
-            <tr>
-              <td colSpan="3" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-dim)' }}>
-                No predictions submitted yet. Be the first!
-              </td>
-            </tr>
-          )}
         </tbody>
       </table>
     </div>
