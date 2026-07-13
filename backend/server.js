@@ -11,7 +11,6 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// --- NEW ENDPOINT TO FIX POT DISPLAY ---
 app.get('/api/users', async (_req, res) => {
   try {
     const result = await pool.query('SELECT id, name FROM users');
@@ -21,7 +20,6 @@ app.get('/api/users', async (_req, res) => {
   }
 });
 
-// --- EXISTING ENDPOINTS ---
 app.get('/api/scores', async (_req, res) => {
   try {
     const usersRes = await pool.query('SELECT id, name FROM users');
@@ -44,16 +42,17 @@ app.get('/api/scores', async (_req, res) => {
     const scores = users.map(user => {
       const up = allPreds.filter(p => p.user_id === user.id);
 
-      // Scoring logic
+      // 1. Group Stage: 1 pt per correct team (max 32)
       let groups = 0;
       up.filter(p => p.stage === 'groups').forEach(gp => {
         ['first', 'second', 'third', 'fourth'].forEach(pos => {
-          if (gp.data?.[pos] && actual['r32']?.has(String(gp.data[pos]).replace(/^["'\s]+|["'\s]+$/g, ''))) {
-            groups++;
-          }
+          const team = String(gp.data?.[pos] || '').replace(/^["'\s]+|["'\s]+$/g, '');
+          if (team && actual['r32']?.has(team)) groups++;
         });
       });
+      groups = Math.min(groups, 32);
 
+      // Helper for knockout stages
       const getScore = (stage, matchIds, pts) => {
         let s = 0;
         matchIds.forEach(mId => {
@@ -62,7 +61,7 @@ app.get('/api/scores', async (_req, res) => {
             s += pts;
           }
         });
-        return s;
+        return Math.min(s, 32);
       };
 
       const r16 = getScore('r16', ['r16_m89', 'r16_m90', 'r16_m91', 'r16_m92', 'r16_m93', 'r16_m94', 'r16_m95', 'r16_m96'], 2);
@@ -72,7 +71,9 @@ app.get('/api/scores', async (_req, res) => {
       
       let champion = 0;
       const cp = up.find(p => p.match_id === 'final');
-      if (cp?.data && actual['champion']?.has(String(cp.data).replace(/^["'\s]+|["'\s]+$/g, ''))) champion = 32;
+      if (cp?.data && actual['champion']?.has(String(cp.data).replace(/^["'\s]+|["'\s]+$/g, ''))) {
+        champion = 32;
+      }
 
       return { 
         user_id: user.id, 
@@ -85,7 +86,5 @@ app.get('/api/scores', async (_req, res) => {
     res.json(scores.sort((a, b) => b.total_points - a.total_points));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
-// ... Keep your existing POST /api/users, /api/predictions/bulk, etc. here ...
 
 app.listen(process.env.PORT || 3001);
