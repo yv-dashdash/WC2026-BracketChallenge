@@ -160,42 +160,43 @@ app.get('/api/scores', async (_req, res) => {
         groups = correctTopTwo + correctThirds;
       }
 
-      // Helper for knockout stages (capped at 32 per stage)
-      const getQualifyingScore = (stageKey, pts) => {
+      // Helper for knockout stages
+      const getQualifyingScore = (stageKey, pts, maxPts) => {
         if (!actual[stageKey]) return 0;
         let s = 0;
         
         const stageMap = {
-          // ADDED ALL 16 MATCH IDs FOR ROUND OF 16
+          // FIXED: Map R16 points to the 16 Round of 32 match IDs
           'r16': [
-            'r16_m89', 'r16_m90', 'r16_m91', 'r16_m92', 
-            'r16_m93', 'r16_m94', 'r16_m95', 'r16_m96',
-            'r16_m97', 'r16_m98', 'r16_m99', 'r16_m100',
-            'r16_m101', 'r16_m102', 'r16_m103', 'r16_m104'
+            'r32_m73', 'r32_m74', 'r32_m75', 'r32_m76',
+            'r32_m77', 'r32_m78', 'r32_m79', 'r32_m80',
+            'r32_m81', 'r32_m82', 'r32_m83', 'r32_m84',
+            'r32_m85', 'r32_m86', 'r32_m87', 'r32_m88'
           ],
-          'qf':  ['qf_01', 'qf_02', 'qf_03', 'qf_04'],
-          'sf':  ['sf_01', 'sf_02'],
-          'final': ['final']
+          'qf':  ['r16_m89', 'r16_m90', 'r16_m91', 'r16_m92', 'r16_m93', 'r16_m94', 'r16_m95', 'r16_m96'],
+          'sf':  ['qf_01', 'qf_02', 'qf_03', 'qf_04'],
+          'final': ['sf_01', 'sf_02']
         };
 
         const relevantMatchIds = stageMap[stageKey] || [];
-        const picks = up.filter(p => p.stage === 'knockout' && relevantMatchIds.includes(p.match_id));
+        // Note: We check both 'knockout' and any stage mapping matches to catch the structural naming difference
+        const picks = up.filter(p => relevantMatchIds.includes(p.match_id));
         
         for (const pick of picks) {
           const cleanPick = typeof pick.data === 'string' ? pick.data.replace(/^["'\s]+|["'\s]+$/g, '') : pick.data;
           if (cleanPick && actual[stageKey].has(cleanPick)) s += pts;
         }
-        return Math.min(s, 32);
+        return Math.min(s, maxPts);
       };
 
-      const r16 = getQualifyingScore('r16', 2);
-      const qf = getQualifyingScore('qf', 4);
-      const sf = getQualifyingScore('sf', 8);
-      const final = getQualifyingScore('final', 16);
+      const r16 = getQualifyingScore('r16', 2, 32); // 16 matches * 2 pts = max 32
+      const qf = getQualifyingScore('qf', 4, 32);  // 8 matches * 4 pts = max 32
+      const sf = getQualifyingScore('sf', 8, 32);  // 4 matches * 8 pts = max 32
+      const final = getQualifyingScore('final', 16, 32); // 2 matches * 16 pts = max 32
       
       let champion = actual['champion'] ? 0 : null;
       if (actual['champion']) {
-        const cp = up.find(p => p.stage === 'knockout' && p.match_id === 'final');
+        const cp = up.find(p => p.match_id === 'final');
         const cleanChampion = typeof cp?.data === 'string' ? cp.data.replace(/^["'\s]+|["'\s]+$/g, '') : cp?.data;
         if (cleanChampion && actual['champion'].has(cleanChampion)) champion = 32;
       }
